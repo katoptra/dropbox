@@ -39,6 +39,16 @@ def _wire(monkeypatch, proton):
     monkeypatch.setattr(p50_trash, "Store", lambda runtime, paths: FakeStore())
     monkeypatch.setattr(p50_trash, "ProtonCLIProvider", lambda *a, **k: proton)
     monkeypatch.setattr(p50_trash.session, "writeback", lambda *a: False)
+    # The run row starts at epoch 1 with a one-minute budget; a clock stuck at 1 keeps
+    # every folder inside it.
+    monkeypatch.setattr(p50_trash, "now", lambda: 1.0, raising=False)
+
+
+def _folders(names):
+    return {
+        f"/my-files/Dropbox/{name}": [proton_node(f"u{name}", f"{name}.txt", 1, "s")]
+        for name in names
+    }
 
 
 def test_trash_groups_by_parent_and_drops_state_rows(
@@ -67,6 +77,8 @@ def test_trash_groups_by_parent_and_drops_state_rows(
         "not_found": 1,
         "listing_failed": 0,
         "folders": 2,
+        "remaining": 0,
+        "chain": False,
     }
     assert proton.trashed == [
         ["/my-files/Dropbox/Docs/a.txt", "/my-files/Dropbox/Docs/b.txt"],
@@ -130,6 +142,8 @@ def test_trash_keeps_state_rows_when_a_parent_listing_fails(
         "not_found": 0,
         "listing_failed": 1,
         "folders": 0,
+        "remaining": 0,
+        "chain": False,
     }
     assert (
         ctx.state.connection.execute("SELECT COUNT(*) FROM mirror_objects").fetchone()[
@@ -162,3 +176,44 @@ def test_trash_without_apply_is_planned(state_context, monkeypatch, plain_crypt)
     _deleted(ctx, ["/Docs/a.txt"])
     result = p50_trash.run(ctx)
     assert result.status == "PLANNED" and result.outputs["planned"] == 1
+
+
+def test_trash_stops_at_the_budget_and_chains(state_context, monkeypatch, plain_crypt):
+    ctx = _ctx(state_context)
+    _deleted(ctx, ["/Docs/Docs.txt", "/Other/Other.txt"])
+    proton = FakeProton(_folders(["Docs", "Other"]))
+    proton.trashed = []
+    proton.trash = lambda paths, phase: proton.trashed.extend(paths)
+    _wire(monkeypatch, proton)
+    clock = iter(range(1, 10_000, 40))  # 40 s per look at the clock, 60 s budget
+    monkeypatch.setattr(p50_trash, "now", lambda: float(next(clock)), raising=False)
+    result = p50_trash.run(ctx)
+    assert proton.trashed == ["/my-files/Dropbox/Docs/Docs.txt"]
+    assert (
+        result.outputs["folders"] == 1
+        and result.outputs["remaining"] == 1
+        and result.outputs["chain"] is True
+    )
+    assert ctx.state.current_run()["chain"] == 1
+    assert [
+        r[0]
+        for r in ctx.state.connection.execute("SELECT path_lower FROM mirror_objects")
+    ] == ["/other/other.txt"]
+
+
+def test_trash_checkpoints_every_few_folders(state_context, monkeypatch, plain_crypt):
+    ctx = _ctx(state_context)
+    _deleted(ctx, ["/A/A.txt", "/B/B.txt", "/C/C.txt"])
+    proton = FakeProton(_folders(["A", "B", "C"]))
+    proton.trash = lambda paths, phase: None
+    _wire(monkeypatch, proton)
+    pushes = []
+    monkeypatch.setattr(
+        p50_trash.statefile,
+        "push",
+        lambda state, runtime, paths, store, label: pushes.append(label),
+    )
+    monkeypatch.setattr(p50_trash, "CHECKPOINT_EVERY", 2, raising=False)
+    result = p50_trash.run(ctx)
+    assert result.outputs["folders"] == 3
+    assert pushes == ["1-trash-2", "1-trash"]
