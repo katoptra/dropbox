@@ -61,7 +61,7 @@ flowchart LR
 | `upload` | One `proton-drive filesystem upload` of the staging tree; Proton skips files whose content it already holds and makes revisions of changed ones |
 | `confirm` | The upload summary must account for every verified file plus every folder, and every failure must name a file in the batch. Those alone are recorded as failed; the rest confirm |
 | `checkpoint` | Merges the confirmed rows into `mirror_objects` and pushes the state to the bucket, a dated copy first and then the canonical key. Always the last step of a batch, so a killed run repeats at most one |
-| `trash` | Only when every planned batch landed: one listing and one `filesystem trash` per folder of deleted files |
+| `trash` | Only when every planned batch landed: one listing and one `filesystem trash` per folder of deleted files, each folder's `mirror_objects` rows dropped as it lands. Checkpoints every 50 folders, stops at the run budget and chains the next run for the folders left, so a reorganized Dropbox drains over a few runs |
 | `reconcile` | On the first run of the configured weekday, or with `RECONCILE=true`: a full Proton walk compared against `mirror_objects`. Rows Proton lacks or mis-sizes are dropped so they re-upload; nodes neither Dropbox nor the state knows are trashed. A walk that does not fit one run resumes on the next, and a partial walk drops and trashes nothing |
 | `report` | Builds the step summary from the state alone, finishes the run row, writes the chain marker, and returns the run's status |
 
@@ -91,7 +91,7 @@ The bucket holds the state and the session, nothing of the mirrored tree.
 
 ```
 .state/state.sqlite.xz.age                     the state: evidence tables, mirror_objects, runs, batches, deletions
-.state/history/<epoch>-<label>.sqlite.xz.age   one copy per checkpoint; label is the batch number, trash, reconcile or report
+.state/history/<epoch>-<label>.sqlite.xz.age   one copy per checkpoint; label is the batch number, trash or trash-<folders>, reconcile or report
 .state/session.tar.age                         the Proton CLI session; no history, a stale copy cannot be restored
 ```
 

@@ -23,7 +23,8 @@ under `src/migrator/phases/` and the Taskfile are this repository's own.
   a run start fresh.
 - **A truncated listing can never become a trash list.** `delta` refuses a listing under
   `listing_floor_ratio` of the mirrored count, and `trash` runs only when every planned
-  batch landed.
+  batch landed. `trash` works folder by folder inside the run budget, checkpoints every
+  50 folders and chains the rest; a run cut off mid-phase repeats at most 50 folders.
 - **`checkpoint` is the last step of a batch**, a dated copy first and then a server-side
   copy to the canonical key, so a killed run repeats at most one batch. A batch that
   recorded nothing fails the run rather than chaining, so an identical failure cannot loop.
