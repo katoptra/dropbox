@@ -55,14 +55,33 @@ def test_upload_tree_partial_failure_exit_code_is_accepted(state_context, tmp_pa
 
 def test_upload_tree_failure_raises_and_still_hooks(state_context, tmp_path):
     cfg, _, state, logger, _ = state_context
-    run, _ = _fake_run([(1, "", "You need to login first")])
+    run, calls = _fake_run([(1, "", "You need to login first")])
     hooks = []
     provider = ProtonCLIProvider(
         cfg, state, logger, run=run, after_call=lambda: hooks.append(1)
     )
     with pytest.raises(ProtonCLIError, match="AUTH"):
         provider.upload_tree([tmp_path / "A"], "/my-files/Dropbox", "40_batches")
-    assert hooks == [1]
+    assert hooks == [1] and len(calls) == 1  # a dead session is never retried
+
+
+def test_mutation_retries_a_transient_failure_then_gives_up(state_context, tmp_path):
+    cfg, _, state, logger, _ = state_context
+    run, calls = _fake_run([(2, "", "ServerError: 503"), (0, '{"uploaded":1}\n', "")])
+    slept = []
+    provider = ProtonCLIProvider(cfg, state, logger, run=run, sleep=slept.append)
+    out = provider.upload_tree([tmp_path / "A"], "/my-files/Dropbox", "40_batches")
+    assert out.startswith('{"uploaded"') and len(calls) == 2
+    assert slept == [cfg.proton.initial_backoff_seconds]
+    rows = state.connection.execute(
+        "SELECT attempt, response_category FROM commands ORDER BY id"
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [(1, "EXIT_2"), (2, "SUCCESS")]
+    run, calls = _fake_run([(2, "", "ServerError: 503")] * 5)
+    provider = ProtonCLIProvider(cfg, state, logger, run=run, sleep=slept.append)
+    with pytest.raises(ProtonCLIError, match="EXIT_2"):
+        provider.trash(["/my-files/Dropbox/x"], "50_trash")
+    assert len(calls) == cfg.proton.mutation_max_attempts
 
 
 def test_list_stops_retrying_on_an_auth_failure(state_context):
@@ -153,11 +172,17 @@ def test_upload_timeout_keeps_the_stderr_tail_as_evidence(state_context, tmp_pat
         )
 
     provider = ProtonCLIProvider(
-        cfg, state, logger, run=run, after_call=lambda: hooks.append(1)
+        cfg,
+        state,
+        logger,
+        run=run,
+        sleep=lambda _: None,
+        after_call=lambda: hooks.append(1),
     )
     with pytest.raises(ProtonCLIError, match="timed out"):
         provider.upload_tree([tmp_path / "A"], "/my-files/Dropbox", "40_batches")
-    assert hooks == [1]  # the session is written back even when the CLI is killed
+    # the session is written back after every attempt, even when the CLI is killed
+    assert hooks == [1] * cfg.proton.mutation_max_attempts
     row = state.connection.execute(
         "SELECT message, safe_raw_error FROM events WHERE level='ERROR' ORDER BY id DESC"
     ).fetchone()

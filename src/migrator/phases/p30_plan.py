@@ -72,6 +72,9 @@ def run(ctx: PhaseContext) -> PhaseResult:
             "DELETE FROM batch_items WHERE batch_id IN (SELECT id FROM batches WHERE status='PLANNED')"
         )
         connection.execute("DELETE FROM batches WHERE status='PLANNED'")
+        # A CHECKPOINTED item is already a mirror_objects row and nothing reads it
+        # again; CONFIRM_FAILED rows stay, the operator reads their failure text.
+        connection.execute("DELETE FROM batch_items WHERE status='CHECKPOINTED'")
         for number, batch in enumerate(batches, start=1):
             cursor = connection.execute(
                 "INSERT INTO batches(run_id, number, bytes, file_count, status) VALUES (?, ?, ?, ?, 'PLANNED')",

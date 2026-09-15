@@ -52,6 +52,25 @@ def test_push_writes_history_then_canonical_and_fetch_restores(
     restored.close()
 
 
+def test_push_compresses_in_slices_that_restore_byte_for_byte(
+    state_context, plain_crypt, monkeypatch
+):
+    """A 4 KB slice turns the smallest state into several xz streams; one lzma read
+    must give back exactly the snapshot."""
+    _, paths, state, _, runtime = state_context
+    monkeypatch.setattr(statefile, "CHUNK_BYTES", 4096)
+    store = FakeStore()
+    statefile.push(state, runtime, paths, store, label="1-1")
+    state.snapshot_to(paths.root / "expected.sqlite")
+    expected = (paths.root / "expected.sqlite").read_bytes()
+    assert len(expected) > 3 * 4096
+    assert lzma.decompress(store.objects[statefile.STATE_KEY]) == expected
+    state.close()
+    paths.state_db.unlink()
+    assert statefile.fetch(runtime, paths, store) == "restored"
+    assert paths.state_db.read_bytes() == expected
+
+
 def test_rollback_copies_history_over_canonical():
     store = FakeStore()
     store.objects[statefile.HISTORY_PREFIX + "1-1.sqlite.xz.age"] = b"old"

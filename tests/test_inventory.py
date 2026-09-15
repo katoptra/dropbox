@@ -44,6 +44,7 @@ def test_inventory_records_counts_and_run_link(state_context, monkeypatch):
         "unhashed": 0,
         "recased": 0,
         "pruned_inventories": 0,
+        "pruned_history": 0,
     }
     assert ctx.state.current_run()["inventory_id"] == inventory_id
 
@@ -89,6 +90,32 @@ def test_prune_keeps_newest_inventories(state_context):
     assert left == {ids[3]}
 
 
+def test_prune_history_drops_old_log_rows_but_keeps_reconcile_figures(
+    state_context,
+):
+    _, _, state, _, _ = state_context
+    old, new = "2020-01-01T00:00:00Z", "2999-01-01T00:00:00Z"
+    with state.connection:
+        state.connection.executemany(
+            "INSERT INTO events(timestamp, level, phase, operation, message, fields_json) VALUES (?, 'INFO', ?, ?, 'm', '{}')",
+            [
+                (old, "40_batches", "step"),
+                (old, "60_reconcile", "figures"),
+                (new, "40_batches", "step"),
+            ],
+        )
+        state.connection.executemany(
+            "INSERT INTO commands(provider, operation, safe_argv_json, started_at, attempt) VALUES ('proton', 'list', '[]', ?, 1)",
+            [(old,), (new,)],
+        )
+    assert p10_inventory.prune_history(state.connection) == 2
+    events = state.connection.execute(
+        "SELECT timestamp, operation FROM events ORDER BY id"
+    ).fetchall()
+    assert [tuple(r) for r in events] == [(old, "figures"), (new, "step")]
+    assert state.connection.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == 1
+
+
 def test_phase_registers_access_token_for_redaction(state_context, monkeypatch):
     ctx = _ctx(state_context)
     inventory_id = seed_api_inventory(
@@ -123,20 +150,8 @@ def test_inventory_recases_paths_from_folder_names(state_context, monkeypatch):
         "inventory",
         lambda self, purpose, reuse_complete=True: inventory_id,
     )
-    with ctx.state.connection:
-        ctx.state.connection.execute(
-            'UPDATE dropbox_objects SET raw_json=\'{"tag": "file"}\' WHERE inventory_id=?',
-            (inventory_id,),
-        )
     result = p10_inventory.run(ctx)
     assert result.outputs["recased"] == 2
-    raw = {
-        r[0]
-        for r in ctx.state.connection.execute(
-            "SELECT raw_json FROM dropbox_objects WHERE inventory_id=?", (inventory_id,)
-        )
-    }
-    assert raw == {"{}"}  # the raw API JSON is dropped once the listing is complete
     displays = {
         r["path_lower"]: r["path_display"]
         for r in ctx.state.connection.execute(

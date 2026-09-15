@@ -146,6 +146,13 @@ def test_interrupted_inventory_resumes_from_committed_cursor(tmp_path, config_fa
     ).fetchone()["count"]
     assert complete["status"] == "COMPLETE"
     assert count == 2
+    raw = {
+        r[0]
+        for r in state.connection.execute(
+            "SELECT raw_json FROM dropbox_objects WHERE inventory_id=?", (inventory_id,)
+        )
+    }
+    assert raw == {"{}"}  # nothing reads the entry's raw JSON back
     assert second_session.urls[-1].endswith("/files/list_folder/continue")
     state.close()
 
