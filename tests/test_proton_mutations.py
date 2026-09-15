@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -91,6 +92,68 @@ def test_list_stops_retrying_on_an_auth_failure(state_context):
     with pytest.raises(ProtonCLIError, match="AUTH"):
         provider.list_folder("/my-files/Dropbox", "40_batches")
     assert len(calls) == 1
+
+
+def test_upload_trees_runs_groups_at_once_and_rescues_a_signed_out_one(
+    state_context, tmp_path
+):
+    """Group B's refresh loses the race: the CLI signs its copy out. Group A's copy
+    holds the refreshed token, so it is adopted, every copy re-seeded, B re-run, and
+    the main session ends up holding the refreshed token."""
+    cfg, _, state, logger, _ = state_context
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "auth-session.json").write_text("old")
+    seen = []
+
+    def run(argv, env=None, **kwargs):
+        copy = Path(env["PROTON_DRIVE_CACHE_DIR"])
+        group = argv[-2].rsplit("/", 1)[-1]
+        seen.append((group, (copy / "auth-session.json").read_text()))
+        if group == "A":
+            (copy / "auth-session.json").write_text("refreshed")
+            return subprocess.CompletedProcess(argv, 0, stdout='{"a":1}\n', stderr="")
+        if (copy / "auth-session.json").read_text() == "old":
+            (copy / "auth-session.json").unlink()
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="login first")
+        return subprocess.CompletedProcess(argv, 0, stdout='{"b":1}\n', stderr="")
+
+    hooks = []
+    provider = ProtonCLIProvider(
+        cfg,
+        state,
+        logger,
+        run=run,
+        sleep=lambda _: None,
+        after_call=lambda: hooks.append(1),
+        session_dir=session_dir,
+    )
+    out = provider.upload_trees(
+        [[tmp_path / "A"], [tmp_path / "B"]], "/my-files/Dropbox", "40_batches"
+    )
+    assert out == ['{"a":1}\n', '{"b":1}\n']
+    assert sorted(seen) == [("A", "old"), ("B", "old"), ("B", "refreshed")]
+    assert (session_dir / "auth-session.json").read_text() == "refreshed"
+    assert hooks == [1]  # written back once, on the calling thread, after adoption
+    rows = state.connection.execute(
+        "SELECT response_category FROM commands ORDER BY id"
+    ).fetchall()
+    assert sorted(r[0] for r in rows) == ["AUTH", "SUCCESS", "SUCCESS"]
+
+
+def test_upload_trees_raises_when_a_group_fails_for_good(state_context, tmp_path):
+    cfg, _, state, logger, _ = state_context
+
+    def run(argv, **kwargs):  # A lands, B refuses every attempt
+        if argv[-2].endswith("/A"):
+            return subprocess.CompletedProcess(argv, 0, stdout="{}\n", stderr="")
+        return subprocess.CompletedProcess(argv, 2, stdout="", stderr="ServerError")
+
+    provider = ProtonCLIProvider(cfg, state, logger, run=run, sleep=lambda _: None)
+    with pytest.raises(ProtonCLIError, match="EXIT_2"):
+        provider.upload_trees(
+            [[tmp_path / "A"], [tmp_path / "B"]], "/my-files/Dropbox", "40_batches"
+        )
 
 
 def test_trash_passes_every_path_in_one_call(state_context):

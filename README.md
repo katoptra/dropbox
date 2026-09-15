@@ -58,8 +58,8 @@ flowchart LR
 | `batches` | Runs each batch through the five steps below, stopping before a batch that would pass the run's budget; stopping with batches left is a success that chains the next run |
 | `fetch` | Downloads the batch from Dropbox into staging under its display paths; a path that vanished since listing is counted and skipped |
 | `verify` | Recomputes every staged file's Dropbox content hash and records SHA-1 and SHA-256. A mismatch is a file edited since listing: removed and counted, never recorded |
-| `upload` | One `proton-drive filesystem upload` of the staging tree; Proton skips files whose content it already holds and makes revisions of changed ones |
-| `confirm` | The upload summary must account for every verified file plus every folder, and every failure must name a file in the batch. Those alone are recorded as failed; the rest confirm |
+| `upload` | `proton-drive filesystem upload` over the staging tree, its top-level entries spread across `proton.upload_workers` processes at once, each from its own copy of the session; Proton skips files whose content it already holds and makes revisions of changed ones |
+| `confirm` | Each upload call's summary must account for every verified file plus every folder under the entries it was handed, and every failure must name a file among them; the batch confirms when every call does. The failed files alone are recorded as failed; the rest confirm |
 | `checkpoint` | Merges the confirmed rows into `mirror_objects` and pushes the state to the bucket, a dated copy first and then the canonical key. Always the last step of a batch, so a killed run repeats at most one |
 | `trash` | Only when every planned batch landed. A topmost folder the mirror holds nothing live under goes in one `filesystem trash` call, subtree and all; a folder still holding live files gets its deleted files trashed by name, 50 paths per call. Each unit's `mirror_objects` rows are dropped as it lands. Checkpoints every 50 units, stops at the run budget and chains the next run for the rest |
 | `reconcile` | On the first run of the configured weekday, or with `RECONCILE=true`: a full Proton walk compared against `mirror_objects`. Rows Proton lacks or mis-sizes are dropped so they re-upload; nodes neither Dropbox nor the state knows are trashed. A walk that does not fit one run resumes on the next, and a partial walk drops and trashes nothing |
@@ -183,6 +183,7 @@ task test && task lint             # pytest; ruff check and format check
 task sync                          # one budgeted run, the same thing Actions runs
 task sync -- RUN_BUDGET_MIN=30     # a shorter budget
 task sync -- RECONCILE=true        # force the weekly Proton walk (the literal word true)
+task sync -- UPLOAD_WORKERS=4      # upload processes per batch, for this run only
 task state-rollback                # list the dated history objects
 task state-rollback -- <key>       # copy one of them over the canonical state
 task session-seal -- .run/pd       # encrypt a laptop Proton CLI session into the bucket
@@ -250,6 +251,7 @@ unknown keys. It names no account.
 | `budget.disk_headroom_gb` | Free disk the runner must keep beyond a batch's staging |
 | `budget.listing_floor_ratio` | Refuse a listing smaller than this share of the mirrored file count |
 | `proton.walk_workers` | Folder listings in flight during the reconcile walk, each from its own copy of the session |
+| `proton.upload_workers` | Upload processes per batch over disjoint top-level staging entries, each from its own copy of the session; `UPLOAD_WORKERS` after the double dash overrides it for one run |
 | `reconcile.weekday` | UTC weekday (0 is Monday) whose first run does the Proton walk |
 
 The three account identifiers in `op.env` override the TOML keys

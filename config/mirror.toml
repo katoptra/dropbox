@@ -35,6 +35,11 @@ listing_floor_ratio = 0.5
 # The reconcile walk is one `filesystem list` process per folder; this many run at once,
 # each from its own copy of the CLI session. Eight matches dropbox.download_workers.
 walk_workers = 8
+# `filesystem upload` processes per batch, each over its own top-level staging entries
+# from its own copy of the session. One process uploads at about 12.8 MB/s plus 0.2 s
+# per file, well under the link; UPLOAD_WORKERS after the double dash tries more for
+# one run before this is raised.
+upload_workers = 1
 
 [reconcile]
 weekday = 0

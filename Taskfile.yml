@@ -15,16 +15,17 @@ vars:
   RUN_EPOCH:
     sh: date +%s
 
-# Run-scoped environment for every migrator command. RECONCILE and RUN_BUDGET_MIN are
-# task vars a run sets after the double dash (task sync -- RECONCILE=true
-# RUN_BUDGET_MIN=30, or the workflow's vars input), mapped to the names the migrator
-# reads; unset, they render empty, which it reads as unset. The migrator's work
+# Run-scoped environment for every migrator command. RECONCILE, RUN_BUDGET_MIN and
+# UPLOAD_WORKERS are task vars a run sets after the double dash (task sync --
+# RECONCILE=true RUN_BUDGET_MIN=30, or the workflow's vars input), mapped to the names
+# the migrator reads; unset, they render empty, which it reads as unset. The migrator's work
 # directory and config path are its own defaults, .run and config/mirror.toml, and
 # AWS_REGION is an ENV line in the image, so every in-toolbox command sees it.
 env:
   MIRROR_RUN_EPOCH: '{{.RUN_EPOCH}}'
   RECONCILE: '{{.RECONCILE}}'
   RUN_BUDGET_MIN: '{{.RUN_BUDGET_MIN}}'
+  UPLOAD_WORKERS: '{{.UPLOAD_WORKERS}}'
   PROTON_DRIVE_LOG_LEVEL: INFO   # the Proton CLI's own log level; its lines reach the public job log
 
 includes:
@@ -48,8 +49,8 @@ includes:
         "  task fmt                  ruff format"
         ""
         "${c}write -- changes Proton Drive and the state in R2${r}"
-        "  task sync -- RUN_BUDGET_MIN=30 RECONCILE=true"
-        "                            ${d}a shorter budget; a forced Proton walk (the literal word true)${r}"
+        "  task sync -- RUN_BUDGET_MIN=30 RECONCILE=true UPLOAD_WORKERS=4"
+        "                            ${d}a shorter budget; a forced Proton walk (the literal word true); upload processes per batch${r}"
         "  task empty-trash          Permanently delete Proton trash (never scheduled)"
         "  task state-rollback -- k  Copy a history object over the canonical state"
         "                            ${d}with no key it lists the history${r}"

@@ -139,6 +139,10 @@ class Proton:
     command_timeout_seconds: float = 300
     transfer_timeout_seconds: float = 3600
     walk_workers: int = 8
+    # `filesystem upload` processes per batch, each over its own top-level staging
+    # entries from its own copy of the session. One is a single process over the whole
+    # batch. UPLOAD_WORKERS after the double dash overrides it for one run.
+    upload_workers: int = 1
 
 
 @dataclass(frozen=True)
@@ -268,6 +272,11 @@ def validate_config(cfg: Config) -> None:
         or not 1 <= cfg.proton.walk_workers <= 32
     ):
         raise ConfigError("proton.walk_workers must be 1 to 32")
+    if (
+        type(cfg.proton.upload_workers) is not int
+        or not 1 <= cfg.proton.upload_workers <= 32
+    ):
+        raise ConfigError("proton.upload_workers must be 1 to 32")
     _positive(cfg.budget.batch_gb, "budget.batch_gb")
     _positive_int(cfg.budget.batch_files, "budget.batch_files")
     _positive(cfg.budget.max_file_gb, "budget.max_file_gb")
