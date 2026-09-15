@@ -199,7 +199,8 @@ path name: mirror status (inventory, mirrored, percent, oversized, batches and r
 remaining); this run (budget used, batches, files fetched, vanished, mismatched,
 uploaded, skipped, confirmed, trashed); throughput; throttling per provider; errors by
 class; the last reconcile walk; every phase's status. Error text lives in the encrypted
-state's `events` table, readable after `task status` from `.run/state.sqlite`.
+state's `events` table, readable after `task status` from `.run/state.sqlite`; log rows
+older than seven days are pruned, the same clock as the bucket's history copies.
 
 **Runbook.**
 

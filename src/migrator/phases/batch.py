@@ -376,10 +376,12 @@ def checkpoint(ctx: PhaseContext, store: Store, batch_id: int) -> dict[str, int]
             "SELECT number FROM batches WHERE id=?", (batch_id,)
         ).fetchone()[0]
     )
+    # Staging is dead once confirm has counted it; clearing it first keeps the
+    # snapshot, its xz and its age copy off a disk still holding a whole batch.
+    _clear(ctx.paths.staging)
     statefile.push(
         ctx.state, ctx.runtime, ctx.paths, store, label=f"{history_label(ctx)}-{number}"
     )
-    _clear(ctx.paths.staging)
     ctx.logger.info(
         PHASE,
         "checkpoint",

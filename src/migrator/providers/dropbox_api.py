@@ -450,7 +450,9 @@ class DropboxAPIProvider:
                 int(bool(entry.get("is_downloadable", True))),
                 symlink.get("target"),
                 json.dumps(entry.get("export_info"), ensure_ascii=False),
-                json.dumps(entry, ensure_ascii=False, sort_keys=True),
+                # Every column the pipeline reads is already its own column; the
+                # entry's raw API JSON would be half the listing and nothing reads it.
+                "{}",
                 page_number,
                 page_number,
             ),

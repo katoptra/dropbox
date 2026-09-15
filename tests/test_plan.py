@@ -130,6 +130,33 @@ def test_plan_refuses_batch_disk_cannot_hold_staging(state_context, monkeypatch)
         p30_plan.run(ctx)
 
 
+def test_plan_prunes_checkpointed_items_and_keeps_failed_ones(
+    state_context, monkeypatch
+):
+    ctx = _ctx(state_context, Budget(ceiling_gb=1, disk_headroom_gb=0))
+    _changed(ctx, [("/a", 2)])
+    with ctx.state.connection:
+        ctx.state.connection.execute(
+            "INSERT INTO batches(id, run_id, number, bytes, file_count, status) VALUES (9, ?, 99, 2, 2, 'CHECKPOINTED')",
+            (ctx.run_id,),
+        )
+        ctx.state.connection.executemany(
+            "INSERT INTO batch_items(batch_id, path_lower, path_display, size, content_hash, status) VALUES (9, ?, ?, 1, 'h', ?)",
+            [("/old", "/old", "CHECKPOINTED"), ("/bad", "/bad", "CONFIRM_FAILED")],
+        )
+    monkeypatch.setattr(
+        p30_plan.shutil, "disk_usage", lambda _: type("U", (), {"free": 10**9})()
+    )
+    p30_plan.run(ctx)
+    left = {
+        r[0]
+        for r in ctx.state.connection.execute(
+            "SELECT path_lower FROM batch_items WHERE batch_id=9"
+        )
+    }
+    assert left == {"/bad"}
+
+
 def test_plan_is_idempotent_within_a_run(state_context, monkeypatch):
     ctx = _ctx(state_context, Budget(ceiling_gb=1, disk_headroom_gb=0))
     _changed(ctx, [("/a", 2)])

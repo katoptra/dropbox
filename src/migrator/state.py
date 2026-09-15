@@ -317,7 +317,10 @@ class State:
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL")
-        self.connection.execute("PRAGMA synchronous=FULL")
+        # NORMAL in WAL mode survives a process crash; only an OS failure could lose
+        # the last commits, and the canonical state is the R2 object fetched at the
+        # start of every run, so a runner's disk never outlives what it holds.
+        self.connection.execute("PRAGMA synchronous=NORMAL")
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.execute("PRAGMA busy_timeout=30000")
         self.connection.executescript(SCHEMA)

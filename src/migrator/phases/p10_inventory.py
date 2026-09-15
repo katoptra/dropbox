@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from ..providers.dropbox_api import DropboxAPIProvider
 from ..providers.dropbox_auth import access_token
@@ -33,6 +34,27 @@ def prune_inventories(connection: sqlite3.Connection, keep: int = 1) -> int:
             connection.executemany(f"DELETE FROM {runs_table} WHERE id=?", stale)
             pruned += len(stale)
     return pruned
+
+
+# The bucket expires the state's history copies after this many days; the log rows
+# inside the state follow the same clock.
+HISTORY_DAYS = 7
+
+
+def prune_history(connection: sqlite3.Connection, days: int = HISTORY_DAYS) -> int:
+    """Events and commands older than `days`, except the reconcile figures the report
+    reads from the latest complete walk, which may be weeks old."""
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    with connection:
+        events = connection.execute(
+            "DELETE FROM events WHERE timestamp < ? "
+            "AND NOT (phase='60_reconcile' AND operation='figures')",
+            (cutoff,),
+        ).rowcount
+        commands = connection.execute(
+            "DELETE FROM commands WHERE started_at < ?", (cutoff,)
+        ).rowcount
+    return events + commands
 
 
 def recase_display_paths(connection: sqlite3.Connection, inventory_id: int) -> int:
@@ -85,13 +107,6 @@ def run(ctx: PhaseContext) -> PhaseResult:
             (inventory_id,),
         ).rowcount
     recased = recase_display_paths(ctx.state.connection, inventory_id)
-    with ctx.state.connection:
-        # Every column the pipeline reads is already its own column; the entry's raw
-        # API JSON is half the listing's bytes and nothing reads it back.
-        ctx.state.connection.execute(
-            "UPDATE dropbox_objects SET raw_json='{}' WHERE inventory_id=? AND raw_json != '{}'",
-            (inventory_id,),
-        )
     summary = ctx.state.connection.execute(
         """
         SELECT
@@ -113,6 +128,7 @@ def run(ctx: PhaseContext) -> PhaseResult:
         "unhashed": int(unhashed),
         "recased": recased,
         "pruned_inventories": prune_inventories(ctx.state.connection),
+        "pruned_history": prune_history(ctx.state.connection),
     }
     ctx.logger.info(PHASE, "gate", "Dropbox inventory complete", **outputs)
     return PhaseResult(outputs=outputs)

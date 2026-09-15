@@ -20,7 +20,12 @@ from ..state import State
 
 
 class ProtonCLIError(RuntimeError):
-    pass
+    """`category` is the attempt's response category when a mutation raised it, so a
+    caller can tell an authentication failure, which no retry helps, from the rest."""
+
+    def __init__(self, message: str, category: str = "") -> None:
+        super().__init__(message)
+        self.category = category
 
 
 def unwrap(value: Any) -> Any:
@@ -556,7 +561,9 @@ class ProtonCLIProvider:
                         claimed_mtime,
                         sha1,
                         int(bool(sha1_verified)) if sha1_verified is not None else None,
-                        json.dumps(node, ensure_ascii=False, sort_keys=True),
+                        # Every field reconcile reads is its own column; the node's raw
+                        # JSON would be half the state and nothing reads it back.
+                        "{}",
                     ),
                 )
                 if node_type == "folder":
@@ -638,12 +645,41 @@ class ProtonCLIProvider:
         *,
         accepted: frozenset[int] = frozenset({0}),
     ) -> str:
-        command_id = self.state.record_command_start("proton", operation, argv, 1)
+        """Runs a mutating CLI call under a bounded retry: a timeout or a failure that
+        is not an authentication failure is tried again after a backoff, up to
+        `mutation_max_attempts`; the last attempt's failure is the one raised."""
+        attempts = self.cfg.proton.mutation_max_attempts
+        delay = self.cfg.proton.initial_backoff_seconds
+        for attempt in range(1, attempts + 1):
+            last = attempt == attempts
+            try:
+                return self._mutate_once(
+                    operation, argv, phase, attempt, accepted, last
+                )
+            except ProtonCLIError as exc:
+                if last or exc.category == "AUTH":
+                    raise
+            self.sleep(delay)
+            delay = min(delay * 2, self.cfg.proton.maximum_backoff_seconds)
+        raise AssertionError("unreachable: the last attempt raises or returns")
+
+    def _mutate_once(
+        self,
+        operation: str,
+        argv: list[str],
+        phase: str,
+        attempt: int,
+        accepted: frozenset[int],
+        last: bool,
+    ) -> str:
+        command_id = self.state.record_command_start("proton", operation, argv, attempt)
         timeout = (
             self.cfg.proton.transfer_timeout_seconds
             if operation == "upload"
             else self.cfg.proton.command_timeout_seconds
         )
+        log = self.logger.error if last else self.logger.warning
+        outcome = "" if last else " and will be retried"
         try:
             try:
                 result = self.run(
@@ -663,14 +699,15 @@ class ProtonCLIProvider:
             stderr = exc.stderr or ""
             if isinstance(stderr, bytes):
                 stderr = stderr.decode("utf-8", "replace")
-            self.logger.error(
+            log(
                 phase,
                 operation,
-                f"official Proton CLI mutation timed out after {int(timeout)} s",
+                f"official Proton CLI mutation timed out after {int(timeout)} s{outcome}",
+                retry_count=attempt,
                 provider_category="TIMEOUT",
                 raw_error=stderr[-4000:],
             )
-            raise ProtonCLIError(f"Proton {operation} timed out") from exc
+            raise ProtonCLIError(f"Proton {operation} timed out", "TIMEOUT") from exc
         category = (
             "SUCCESS"
             if result.returncode == 0
@@ -678,15 +715,18 @@ class ProtonCLIProvider:
         )
         self.state.record_command_end(command_id, result.returncode, category)
         if result.returncode not in accepted or category == "AUTH":
-            self.logger.error(
+            final = last or category == "AUTH"
+            (self.logger.error if final else self.logger.warning)(
                 phase,
                 operation,
-                "official Proton CLI mutation failed",
+                "official Proton CLI mutation failed" + ("" if final else outcome),
+                retry_count=attempt,
                 provider_category=category,
                 raw_error=result.stderr[-4000:],
             )
             raise ProtonCLIError(
-                f"Proton {operation} failed ({category}): {result.stderr[-4000:]}"
+                f"Proton {operation} failed ({category}): {result.stderr[-4000:]}",
+                category,
             )
         if result.returncode != 0:
             # An accepted non-zero exit means the CLI handled some items and refused
