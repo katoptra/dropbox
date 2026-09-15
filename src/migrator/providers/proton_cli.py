@@ -94,6 +94,15 @@ class Attempt:
 
 
 SESSION_FILE = "auth-session.json"
+# `filesystem upload` exits 1 when it refused some items and handled the rest; confirm
+# reads the summary either way.
+UPLOAD_EXITS = frozenset({0, 1})
+
+
+def _settled(record: Attempt, accepted: frozenset[int]) -> bool:
+    """An attempt the caller can read a result from: an accepted exit that was not an
+    authentication failure."""
+    return record.returncode in accepted and record.category != "AUTH"
 
 
 class WorkerSessions:
@@ -605,8 +614,96 @@ class ProtonCLIProvider:
                 (category, snapshot_id, str(folder["uid"])),
             )
 
-    def upload_tree(self, sources: list[Path], destination: str, phase: str) -> str:
-        argv = [
+    def upload_tree(
+        self,
+        sources: list[Path],
+        destination: str,
+        phase: str,
+        *,
+        env: dict[str, str] | None = None,
+        writeback: bool = True,
+    ) -> str:
+        return self._mutation(
+            "upload",
+            self._upload_argv(sources, destination),
+            phase,
+            accepted=UPLOAD_EXITS,
+            env=env,
+            writeback=writeback,
+        )
+
+    def upload_trees(
+        self, groups: list[list[Path]], destination: str, phase: str
+    ) -> list[str]:
+        """One `filesystem upload` per group, the groups at once, each process from its
+        own copy of the session as the walk's workers run. A group whose token refresh
+        lost the race is signed out by the CLI: the copy that won is adopted and those
+        groups run once more, over files Proton now skips as identical. Returns each
+        group's stdout in order, or raises the first group's error."""
+        if len(groups) == 1:
+            return [self.upload_tree(groups[0], destination, phase)]
+        outcomes: list[str | ProtonCLIError] = [ProtonCLIError("not run")] * len(groups)
+        with WorkerSessions(self.session_dir, len(groups)) as sessions:
+            self._upload_round(groups, destination, phase, sessions, outcomes)
+            losers = [
+                k
+                for k, outcome in enumerate(outcomes)
+                if isinstance(outcome, ProtonCLIError) and outcome.category == "AUTH"
+            ]
+            if losers and sessions.promote():
+                sessions.reseed()
+                self.logger.warning(
+                    phase,
+                    "session",
+                    "adopted the refreshed Proton session and re-ran the uploads it signed out",
+                    retry_count=len(losers),
+                    provider_category="AUTH",
+                )
+                self._upload_round(
+                    groups, destination, phase, sessions, outcomes, losers
+                )
+            sessions.promote()
+        self._after()
+        for outcome in outcomes:
+            if isinstance(outcome, ProtonCLIError):
+                raise outcome
+        return [outcome for outcome in outcomes if not isinstance(outcome, Exception)]
+
+    def _upload_round(
+        self,
+        groups: list[list[Path]],
+        destination: str,
+        phase: str,
+        sessions: WorkerSessions,
+        outcomes: list[str | ProtonCLIError],
+        indexes: list[int] | None = None,
+    ) -> None:
+        """Runs the given groups on worker threads, which only run the CLI; every
+        attempt is recorded afterwards on this thread, the one that owns the state."""
+        timeout = self.cfg.proton.transfer_timeout_seconds
+        chosen = list(range(len(groups))) if indexes is None else indexes
+        with ThreadPoolExecutor(max_workers=len(chosen)) as pool:
+            futures = {
+                k: pool.submit(
+                    self._try,
+                    self._upload_argv(groups[k], destination),
+                    timeout,
+                    UPLOAD_EXITS,
+                    sessions.env(k),
+                    False,
+                )
+                for k in chosen
+            }
+        for k, future in futures.items():
+            try:
+                outcomes[k] = self._settle(
+                    "upload", phase, future.result(), UPLOAD_EXITS
+                )
+            except ProtonCLIError as exc:
+                outcomes[k] = exc
+
+    def _upload_argv(self, sources: list[Path], destination: str) -> list[str]:
+        return [
             self.cfg.proton.executable,
             "filesystem",
             "upload",
@@ -619,7 +716,6 @@ class ProtonCLIProvider:
             *(str(source) for source in sources),
             destination,
         ]
-        return self._mutation("upload", argv, phase, accepted=frozenset({0, 1}))
 
     def trash(self, cli_paths: list[str], phase: str) -> None:
         if not cli_paths:
@@ -644,103 +740,148 @@ class ProtonCLIProvider:
         phase: str,
         *,
         accepted: frozenset[int] = frozenset({0}),
+        env: dict[str, str] | None = None,
+        writeback: bool = True,
     ) -> str:
-        """Runs a mutating CLI call under a bounded retry: a timeout or a failure that
-        is not an authentication failure is tried again after a backoff, up to
-        `mutation_max_attempts`; the last attempt's failure is the one raised."""
-        attempts = self.cfg.proton.mutation_max_attempts
-        delay = self.cfg.proton.initial_backoff_seconds
-        for attempt in range(1, attempts + 1):
-            last = attempt == attempts
-            try:
-                return self._mutate_once(
-                    operation, argv, phase, attempt, accepted, last
-                )
-            except ProtonCLIError as exc:
-                if last or exc.category == "AUTH":
-                    raise
-            self.sleep(delay)
-            delay = min(delay * 2, self.cfg.proton.maximum_backoff_seconds)
-        raise AssertionError("unreachable: the last attempt raises or returns")
+        """A mutating CLI call under a bounded retry: a timeout or a failure that is not
+        an authentication failure is tried again after a backoff, up to
+        `mutation_max_attempts`. The attempts run first and are recorded after, so the
+        same two halves serve a worker thread that must not touch the state."""
+        records = self._try(argv, self._timeout(operation), accepted, env, writeback)
+        return self._settle(operation, phase, records, accepted)
 
-    def _mutate_once(
+    def _timeout(self, operation: str) -> float:
+        if operation == "upload":
+            return self.cfg.proton.transfer_timeout_seconds
+        return self.cfg.proton.command_timeout_seconds
+
+    def _try(
+        self,
+        argv: list[str],
+        timeout: float,
+        accepted: frozenset[int],
+        env: dict[str, str] | None,
+        writeback: bool,
+    ) -> list[Attempt]:
+        """Runs the attempts and returns their records; touches neither the state nor
+        the logger, so a worker thread may call it. Stops at an accepted exit or an
+        authentication failure, which no retry helps."""
+        delay = self.cfg.proton.initial_backoff_seconds
+        attempts = self.cfg.proton.mutation_max_attempts
+        made: list[Attempt] = []
+        for attempt in range(1, attempts + 1):
+            started_at = utc_now()
+            try:
+                try:
+                    result = self.run(
+                        argv,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                        timeout=timeout,
+                        env=env,
+                    )
+                finally:
+                    if writeback:
+                        self._after()
+            except subprocess.TimeoutExpired as exc:
+                # The CLI prints nothing on stdout until it finishes, so its stderr
+                # tail is the only account of a stalled transfer.
+                stderr = exc.stderr or ""
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode("utf-8", "replace")
+                record = Attempt(
+                    argv,
+                    attempt,
+                    -1,
+                    "TIMEOUT",
+                    "",
+                    stderr[-4000:],
+                    started_at,
+                    utc_now(),
+                )
+            else:
+                category = (
+                    "SUCCESS"
+                    if result.returncode == 0
+                    else _category(result.stderr, result.returncode)
+                )
+                record = Attempt(
+                    argv,
+                    attempt,
+                    result.returncode,
+                    category,
+                    result.stdout,
+                    result.stderr[-4000:],
+                    started_at,
+                    utc_now(),
+                )
+            made.append(record)
+            if _settled(record, accepted) or record.category == "AUTH":
+                return made
+            if attempt < attempts:
+                self.sleep(delay)
+                delay = min(delay * 2, self.cfg.proton.maximum_backoff_seconds)
+        return made
+
+    def _settle(
         self,
         operation: str,
-        argv: list[str],
         phase: str,
-        attempt: int,
+        records: list[Attempt],
         accepted: frozenset[int],
-        last: bool,
     ) -> str:
-        command_id = self.state.record_command_start("proton", operation, argv, attempt)
-        timeout = (
-            self.cfg.proton.transfer_timeout_seconds
-            if operation == "upload"
-            else self.cfg.proton.command_timeout_seconds
-        )
-        log = self.logger.error if last else self.logger.warning
-        outcome = "" if last else " and will be retried"
-        try:
-            try:
-                result = self.run(
-                    argv,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=False,
-                    timeout=timeout,
-                )
-            finally:
-                self._after()
-        except subprocess.TimeoutExpired as exc:
-            self.state.record_command_end(command_id, -1, "TIMEOUT")
-            # The CLI prints nothing on stdout until it finishes, so its stderr tail
-            # is the only account of a stalled transfer; the state carries it to R2.
-            stderr = exc.stderr or ""
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode("utf-8", "replace")
+        """Records and logs every attempt of a mutation, then returns the last one's
+        stdout or raises its failure."""
+        last = records[-1]
+        for record in records:
+            command_id = self.state.record_command_start(
+                "proton",
+                operation,
+                record.argv,
+                record.attempt,
+                started_at=record.started_at,
+            )
+            self.state.record_command_end(
+                command_id,
+                record.returncode,
+                record.category,
+                completed_at=record.completed_at,
+            )
+            final = record is last
+            log = self.logger.error if final else self.logger.warning
+            outcome = "" if final else " and will be retried"
+            if record.category == "TIMEOUT":
+                seconds = int(self._timeout(operation))
+                message = f"official Proton CLI mutation timed out after {seconds} s"
+            elif not _settled(record, accepted):
+                message = "official Proton CLI mutation failed"
+            elif record.returncode != 0:
+                # An accepted non-zero exit means the CLI handled some items and refused
+                # others; confirm reads the upload summary's counts as one batch-wide
+                # verdict, and this log line is the only account of why the exit was
+                # non-zero.
+                message = f"official Proton CLI mutation exited {record.returncode} and was accepted"
+                log, outcome = self.logger.warning, ""
+            else:
+                continue
             log(
                 phase,
                 operation,
-                f"official Proton CLI mutation timed out after {int(timeout)} s{outcome}",
-                retry_count=attempt,
-                provider_category="TIMEOUT",
-                raw_error=stderr[-4000:],
+                message + outcome,
+                retry_count=record.attempt,
+                provider_category=record.category,
+                raw_error=record.stderr,
             )
-            raise ProtonCLIError(f"Proton {operation} timed out", "TIMEOUT") from exc
-        category = (
-            "SUCCESS"
-            if result.returncode == 0
-            else _category(result.stderr, result.returncode)
-        )
-        self.state.record_command_end(command_id, result.returncode, category)
-        if result.returncode not in accepted or category == "AUTH":
-            final = last or category == "AUTH"
-            (self.logger.error if final else self.logger.warning)(
-                phase,
-                operation,
-                "official Proton CLI mutation failed" + ("" if final else outcome),
-                retry_count=attempt,
-                provider_category=category,
-                raw_error=result.stderr[-4000:],
-            )
+        if last.category == "TIMEOUT":
+            raise ProtonCLIError(f"Proton {operation} timed out", "TIMEOUT")
+        if not _settled(last, accepted):
             raise ProtonCLIError(
-                f"Proton {operation} failed ({category}): {result.stderr[-4000:]}",
-                category,
+                f"Proton {operation} failed ({last.category}): {last.stderr}",
+                last.category,
             )
-        if result.returncode != 0:
-            # An accepted non-zero exit means the CLI handled some items and refused
-            # others; confirm reads the upload summary's counts as one batch-wide
-            # verdict, and this log line is the only account of why the exit was
-            # non-zero.
-            self.logger.warning(
-                phase,
-                operation,
-                f"official Proton CLI mutation exited {result.returncode} and was accepted",
-                provider_category=category,
-                raw_error=result.stderr[-4000:],
-            )
-        return result.stdout
+        return last.stdout
 
 
 class _Walk:

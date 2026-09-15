@@ -199,7 +199,10 @@ class FakeProton:
     def root_uid(self, phase):
         return "uid-destination"
 
-    def upload_tree(self, sources, destination, phase):
+    def upload_trees(self, groups, destination, phase):
+        return [self.upload_tree(group, destination, phase) for group in groups]
+
+    def upload_tree(self, sources, destination, phase, env=None, writeback=True):
         self.uploads.append(([str(s) for s in sources], destination))
         counts = Counter()
         failures = []

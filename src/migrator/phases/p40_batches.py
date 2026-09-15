@@ -39,6 +39,7 @@ def run(ctx: PhaseContext) -> PhaseResult:
         ctx.state,
         ctx.logger,
         after_call=lambda: session.writeback(ctx.runtime, ctx.paths, store),
+        session_dir=ctx.paths.session,
     )
     # A Dropbox access token lives four hours and a run up to six, so the provider
     # gets a fresh one before every batch's fetch, the only step that calls Dropbox.

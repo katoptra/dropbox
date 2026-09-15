@@ -214,8 +214,9 @@ def test_upload_stores_the_cli_report_as_an_artifact(state_context):
     batch.fetch(ctx, FakeDropbox(files), batch_id)
     batch.verify(ctx, batch_id)
     batch.upload(ctx, FakeProton({}), batch_id)
-    report = ctx.phase_dir("40_batches") / f"upload-{batch_id}.json"
-    summary = json.loads(report.read_text(encoding="utf-8"))
+    report = ctx.phase_dir("40_batches") / f"upload-{batch_id}-0.json"
+    header, summary = (json.loads(line) for line in report.read_text().splitlines())
+    assert header == {"sources": ["a.txt"]}
     assert summary == {
         "transferredItems": 1,
         "transferredBytes": 2,
@@ -228,7 +229,7 @@ def test_upload_stores_the_cli_report_as_an_artifact(state_context):
         (ctx.phase_run_id,),
     ).fetchone()
     assert row["role"] == "upload_report"
-    assert row["relative_path"].endswith(f"upload-{batch_id}.json")
+    assert row["relative_path"].endswith(f"upload-{batch_id}-0.json")
 
 
 def test_confirm_is_a_no_op_with_no_verified_rows(state_context):
@@ -301,9 +302,11 @@ def test_confirm_fails_the_batch_when_a_failure_names_nothing_in_it(state_contex
     batch_id = _batch(ctx, files)
     batch.fetch(ctx, FakeDropbox(files), batch_id)
     batch.verify(ctx, batch_id)
-    report = ctx.phase_dir(batch.PHASE) / f"upload-{batch_id}.json"
+    report = ctx.phase_dir(batch.PHASE) / f"upload-{batch_id}-0.json"
     report.write_text(
-        json.dumps(
+        json.dumps({"sources": ["a.txt", "b.txt"]})
+        + "\n"
+        + json.dumps(
             {
                 "transferredItems": 1,
                 "transferredBytes": 2,
@@ -336,6 +339,54 @@ def test_confirm_counts_content_identical_skips(state_context):
     batch.upload(ctx, proton, batch_id)
     counts = batch.confirm(ctx, batch_id)
     assert counts == {"confirmed": 2, "skipped_identical": 1, "confirm_failed": 0}
+
+
+def test_upload_workers_split_the_batch_and_confirm_settles_each_call(
+    state_context,
+):
+    """Two workers: the heaviest top-level entry gets its own call, the rest share
+    one; a failure in one call marks only that call's files, and the batch confirms
+    from both summaries together."""
+    cfg, paths, state, logger, runtime = state_context
+    ctx = _ctx((cfg, paths, state, logger, replace(runtime, upload_workers=2)))
+    files = {"/Big/x.bin": b"x" * 40, "/Docs/a.txt": b"aa", "/c.txt": b"c"}
+    batch_id = _batch(ctx, files)
+    batch.fetch(ctx, FakeDropbox(files), batch_id)
+    batch.verify(ctx, batch_id)
+    proton = FakeProton({})
+    proton.fail = {"a.txt"}
+    batch.upload(ctx, proton, batch_id)
+    assert [sources for sources, _ in proton.uploads] == [
+        [str(ctx.paths.staging / "Big")],
+        [str(ctx.paths.staging / "Docs"), str(ctx.paths.staging / "c.txt")],
+    ]
+    counts = batch.confirm(ctx, batch_id)
+    assert counts == {"confirmed": 2, "skipped_identical": 0, "confirm_failed": 1}
+    statuses = {r["path_lower"]: r["status"] for r in batch.items(ctx, batch_id)}
+    assert statuses == {
+        "/big/x.bin": "CONFIRMED",
+        "/docs/a.txt": "CONFIRM_FAILED",
+        "/c.txt": "CONFIRMED",
+    }
+
+
+def test_confirm_refuses_a_batch_a_report_does_not_cover(state_context):
+    """A summary that balances for the entries it names still leaves a file no call
+    was handed unaccounted for; nothing is recorded."""
+    ctx = _ctx(state_context)
+    files = {"/a.txt": b"aa", "/b.txt": b"bb"}
+    batch_id = _batch(ctx, files)
+    batch.fetch(ctx, FakeDropbox(files), batch_id)
+    batch.verify(ctx, batch_id)
+    report = ctx.phase_dir(batch.PHASE) / f"upload-{batch_id}-0.json"
+    report.write_text(
+        json.dumps({"sources": ["a.txt"]})
+        + "\n"
+        + json.dumps({"transferredItems": 1, "skippedItems": 0, "failedItems": 0}),
+        encoding="utf-8",
+    )
+    counts = batch.confirm(ctx, batch_id)
+    assert counts == {"confirmed": 0, "skipped_identical": 0, "confirm_failed": 2}
 
 
 def test_checkpoint_merges_confirmed_rows_and_pushes(state_context, plain_crypt):

@@ -32,8 +32,8 @@ under `src/migrator/phases/` and the Taskfile are this repository's own.
   recorded nothing fails the run rather than chaining, so an identical failure cannot loop.
 - **The session is this mirror's own.** Two processes holding it race its rotating
   refresh token. Never run `sync` or `empty-trash` from a laptop while an Actions run may
-  be going. The reconcile walk's workers each run from their own copy of the session, and
-  the copy a refresh rewrote is adopted.
+  be going. The reconcile walk's workers and the upload workers each run from their own
+  copy of the session, and the copy a refresh rewrote is adopted.
 - **`run_budget_minutes` stays 20 minutes under `sync.yml`'s `timeout-minutes`**, so the
   last batch's upload and the report finish. The chain is the workflow's, on `.run/chain`.
 - **Files are keyed by lowercased path**, so a case-only rename changes nothing in the
@@ -41,7 +41,7 @@ under `src/migrator/phases/` and the Taskfile are this repository's own.
   parent segments inconsistently.
 - **The logs are public.** The report is built from the state and carries counts only;
   errors print as their class unless `MIRROR_VERBOSE=1`; `op run` masks every value.
-- **Run flags go after the double dash** (`task sync -- RUN_BUDGET_MIN=30 RECONCILE=true`,
+- **Run flags go after the double dash** (`task sync -- RUN_BUDGET_MIN=30 RECONCILE=true UPLOAD_WORKERS=4`,
   or the workflow's `vars` input); the Taskfile maps them to the environment the migrator
   reads. `RECONCILE` takes the literal word `true`.
 - **`config/mirror.toml` is strict** and rejects unknown keys; the three account

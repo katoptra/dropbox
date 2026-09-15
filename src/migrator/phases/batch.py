@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -205,59 +206,105 @@ def verify(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
     }
 
 
+# ponytail: a group's cost is its bytes at the CLI's 12.8 MB/s plus 0.2 s per file,
+# so a file weighs as much as 2.7 MB when the groups are balanced. Measured once from
+# batches.details_json; the upgrade path is fitting it from this run's batches.
+FILE_WEIGHT = 2_700_000
+
+
+def _top(row: Any) -> str:
+    """The top-level staging entry a file lands under."""
+    return PurePosixPath(str(row["path_display"]).lstrip("/")).parts[0]
+
+
+def _groups(rows: list, workers: int) -> list[list[str]]:
+    """Top-level staging entries spread over at most `workers` groups, heaviest first
+    into the lightest group. Disjoint entries share no folder to create, so the
+    groups can upload at once. One worker is one group holding every entry."""
+    weight: Counter[str] = Counter()
+    for row in rows:
+        weight[_top(row)] += int(row["size"]) + FILE_WEIGHT
+    groups: list[list[str]] = [[] for _ in range(min(workers, len(weight)))]
+    load = [0] * len(groups)
+    for top, cost in sorted(weight.items(), key=lambda item: (-item[1], item[0])):
+        lightest = load.index(min(load))
+        groups[lightest].append(top)
+        load[lightest] += cost
+    return [sorted(group) for group in groups]
+
+
 def upload(ctx: PhaseContext, proton: Any, batch_id: int) -> dict[str, int]:
     rows = items(ctx, batch_id, "VERIFIED")
     if not rows:
         return {"uploaded_files": 0, "uploaded_bytes": 0}
-    sources = sorted(path for path in ctx.paths.staging.iterdir())
-    stdout = proton.upload_tree(sources, ctx.cfg.proton.destination, PHASE)
-    # The CLI's own transfer summary is confirm's evidence, so this artifact is kept.
-    report = ctx.phase_dir(PHASE) / f"upload-{batch_id}.json"
-    report.write_text(stdout or "", encoding="utf-8")
-    ctx.state.record_artifact(ctx.phase_run_id, "upload_report", report, ctx.paths.root)
+    workers = ctx.runtime.upload_workers or ctx.cfg.proton.upload_workers
+    groups = _groups(rows, workers)
+    outputs = proton.upload_trees(
+        [[ctx.paths.staging / top for top in group] for group in groups],
+        ctx.cfg.proton.destination,
+        PHASE,
+    )
+    for index, (group, stdout) in enumerate(zip(groups, outputs, strict=True)):
+        # The CLI's own transfer summary is confirm's evidence, so this artifact is
+        # kept; its first line names the entries the call was handed.
+        report = ctx.phase_dir(PHASE) / f"upload-{batch_id}-{index}.json"
+        report.write_text(
+            json.dumps({"sources": group}) + "\n" + (stdout or ""), encoding="utf-8"
+        )
+        ctx.state.record_artifact(
+            ctx.phase_run_id, "upload_report", report, ctx.paths.root
+        )
     total = sum(int(r["size"]) for r in rows)
     ctx.logger.info(
-        PHASE, "upload", "batch uploaded", batch=batch_id, files=len(rows), bytes=total
+        PHASE,
+        "upload",
+        "batch uploaded",
+        batch=batch_id,
+        files=len(rows),
+        bytes=total,
+        groups=len(groups),
     )
     return {"uploaded_files": len(rows), "uploaded_bytes": total}
 
 
-def _last_summary(report: Path) -> dict[str, Any] | None:
-    """The CLI writes progress and its final summary as one JSON object per line; the
-    last line carrying `transferredItems` is the summary."""
-    if not report.exists():
-        return None
+def _read_report(report: Path) -> tuple[list[str], dict[str, Any] | None]:
+    """The report is one JSON object per line: the sources header first, then the
+    CLI's progress and its final summary; the last line carrying `transferredItems`
+    is the summary."""
+    sources: list[str] = []
     summary: dict[str, Any] | None = None
     for line in report.read_text(encoding="utf-8").splitlines():
         try:
             candidate = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(candidate, dict) and "transferredItems" in candidate:
+        if not isinstance(candidate, dict):
+            continue
+        if "sources" in candidate:
+            sources = [str(top) for top in candidate["sources"]]
+        elif "transferredItems" in candidate:
             summary = candidate
-    return summary
+    return sources, summary
 
 
-def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
-    """The CLI's own summary is the evidence: no re-listing Proton. A batch confirms
-    when transferred, skipped and failed items account for every verified file plus
-    every directory it landed in, and every failure names a file in the batch; those
-    files alone are left for the next run."""
-    rows = items(ctx, batch_id, "VERIFIED")
-    files = len(rows)
-    if not files:
-        return {"confirmed": 0, "skipped_identical": 0, "confirm_failed": 0}
-    summary = _last_summary(ctx.phase_dir(PHASE) / f"upload-{batch_id}.json")
-    if summary is None:
-        raise PhaseError("upload summary missing")
-    folders = sum(1 for p in ctx.paths.staging.rglob("*") if p.is_dir())
+@dataclass(frozen=True)
+class _Verdict:
+    """One upload call's summary held against the files and folders it was handed."""
+
+    confirmed: bool
+    failed_rows: list
+    errors: dict[str, str]
+    counts: Counter[str]
+
+
+def _verdict(rows: list, folders: int, summary: dict[str, Any]) -> _Verdict:
     transferred = int(summary.get("transferredItems", 0))
     skipped = int(summary.get("skippedItems", 0))
     failed = int(summary.get("failedItems", 0))
     failures = [f for f in summary.get("failures") or [] if isinstance(f, dict)]
     # The CLI names a failure by basename alone, so every verified item carrying that
     # name is left for the next run; an over-marked twin costs one content-identical
-    # skip. A failure naming nothing in the batch (a folder, say) means files were never
+    # skip. A failure naming nothing in the call (a folder, say) means files were never
     # attempted, and the whole batch stays unrecorded as before.
     errors = {str(f.get("name") or ""): str(f.get("error") or "") for f in failures}
     errors.pop("", None)
@@ -265,8 +312,57 @@ def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
         r for r in rows if PurePosixPath(str(r["path_display"])).name in errors
     ]
     matched = {PurePosixPath(str(r["path_display"])).name for r in failed_rows}
-    accounted = transferred + skipped + failed == files + folders
+    accounted = transferred + skipped + failed == len(rows) + folders
     confirmed = accounted and failed == len(failures) and matched == set(errors)
+    counts = Counter(
+        files=len(rows),
+        folders=folders,
+        transferred=transferred,
+        skipped=skipped,
+        failed=failed,
+    )
+    return _Verdict(confirmed, failed_rows, errors, counts)
+
+
+def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
+    """The CLI's own summaries are the evidence: no re-listing Proton. Each upload call
+    confirms when transferred, skipped and failed items account for every verified file
+    plus every directory under the entries it was handed, and every failure names a
+    file among them; the batch confirms when every call does, and the failed files
+    alone are left for the next run."""
+    rows = items(ctx, batch_id, "VERIFIED")
+    files = len(rows)
+    if not files:
+        return {"confirmed": 0, "skipped_identical": 0, "confirm_failed": 0}
+    reports = sorted(ctx.phase_dir(PHASE).glob(f"upload-{batch_id}-*.json"))
+    by_top: dict[str, list] = defaultdict(list)
+    for row in rows:
+        by_top[_top(row)].append(row)
+    verdicts = []
+    covered = 0
+    for report in reports:
+        sources, summary = _read_report(report)
+        if summary is None:
+            raise PhaseError("upload summary missing")
+        group = [row for top in sources for row in by_top.get(top, [])]
+        covered += len(group)
+        folders = sum(
+            1
+            for top in sources
+            for path in (ctx.paths.staging / top, *(ctx.paths.staging / top).rglob("*"))
+            if path.is_dir()
+        )
+        verdicts.append(_verdict(group, folders, summary))
+    if not verdicts:
+        raise PhaseError("upload summary missing")
+    confirmed = covered == files and all(v.confirmed for v in verdicts)
+    failed_rows = [row for v in verdicts for row in v.failed_rows]
+    errors = {name: error for v in verdicts for name, error in v.errors.items()}
+    counts: Counter[str] = Counter()
+    for v in verdicts:
+        counts.update(v.counts)
+    skipped = counts["skipped"]
+    matched = {PurePosixPath(str(r["path_display"])).name for r in failed_rows}
     good = files - len(failed_rows) if confirmed else 0
     with ctx.state.connection:
         if confirmed:
@@ -286,17 +382,7 @@ def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
         else:
             ctx.state.connection.execute(
                 "UPDATE batch_items SET status='CONFIRM_FAILED', details_json=? WHERE batch_id=? AND status='VERIFIED'",
-                (
-                    _details(
-                        "upload summary mismatch",
-                        files=files,
-                        folders=folders,
-                        transferred=transferred,
-                        skipped=skipped,
-                        failed=failed,
-                    ),
-                    batch_id,
-                ),
+                (_details("upload summary mismatch", **counts), batch_id),
             )
     for name in sorted(matched) if confirmed else ():
         # The error class reaches the log; the name stays in the encrypted state.
