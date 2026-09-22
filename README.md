@@ -1,7 +1,20 @@
-# dropbox
+<p align="center">
+  <a href="https://github.com/katoptra">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://katoptra.org/brand/katoptra-mark-dark-224.png">
+      <img src="https://katoptra.org/brand/katoptra-mark-224.png" alt="Katoptra" width="112">
+    </picture>
+  </a>
+</p>
 
-[![sync](https://github.com/katoptra/dropbox/actions/workflows/sync.yml/badge.svg)](https://github.com/katoptra/dropbox/actions/workflows/sync.yml)
-[![license](https://img.shields.io/github/license/katoptra/dropbox)](LICENSE)
+<h1 align="center">dropbox</h1>
+
+<p align="center">A nightly mirror of a Dropbox account into Proton Drive.</p>
+
+<p align="center">
+  <a href="https://github.com/katoptra/dropbox/actions/workflows/sync.yml"><img src="https://github.com/katoptra/dropbox/actions/workflows/sync.yml/badge.svg" alt="sync"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/katoptra/dropbox" alt="license"></a>
+</p>
 
 A nightly, self-chaining mirror of a Dropbox account into one Proton Drive folder. After
 each run Proton Drive holds what Dropbox held at listing time. Changed files become new
