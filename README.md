@@ -14,6 +14,7 @@
 <p align="center">
   <a href="https://github.com/katoptra/dropbox/actions/workflows/sync.yml"><img src="https://github.com/katoptra/dropbox/actions/workflows/sync.yml/badge.svg" alt="sync"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/katoptra/dropbox" alt="license"></a>
+  <a href="https://github.com/katoptra/dropbox/actions/workflows/sync.yml"><img src="https://healthchecks.io/b/2/7ab971f5-d3bc-4bfe-9a63-72103114ae28.svg" alt="mirror"></a>
 </p>
 
 A nightly, self-chaining mirror of a Dropbox account into one Proton Drive folder. After
