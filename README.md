@@ -76,7 +76,7 @@ flowchart LR
 | `confirm` | The upload summary must account for every verified file plus every folder, and every failure must name a file in the batch. Those alone are recorded as failed; the rest confirm |
 | `checkpoint` | Merges the confirmed rows into `mirror_objects` and pushes the state to the bucket, a dated copy first and then the canonical key. Always the last step of a batch, so a killed run repeats at most one |
 | `trash` | Only when every planned batch landed. A topmost folder the mirror holds nothing live under goes in one `filesystem trash` call, subtree and all; a folder still holding live files gets its deleted files trashed by name, 50 paths per call. Each unit's `mirror_objects` rows are dropped as it lands. Checkpoints every 50 units, stops at the run budget and chains the next run for the rest |
-| `reconcile` | On the first run of the configured weekday, or with `RECONCILE=true`: a full Proton walk compared against `mirror_objects`. Rows Proton lacks or mis-sizes are dropped so they re-upload; nodes neither Dropbox nor the state knows are trashed. A walk that does not fit one run resumes on the next, and a partial walk drops and trashes nothing |
+| `reconcile` | Once the last complete walk is `RECONCILE_HOURS` (168, a week) old, by lib's `due`, or with `RECONCILE=true`: a full Proton walk compared against `mirror_objects`. Rows Proton lacks or mis-sizes are dropped so they re-upload; nodes neither Dropbox nor the state knows are trashed. A walk that does not fit one run resumes on the next, and a partial walk drops and trashes nothing |
 | `report` | Builds the step summary from the state alone, finishes the run row, writes the chain marker, and returns the run's status |
 
 Every step is plan-by-default: `batches`, `trash`, `reconcile`, `report` and
@@ -107,6 +107,7 @@ The bucket holds the state and the session, nothing of the mirrored tree.
 .state/state.sqlite.xz.age                     the state: evidence tables, mirror_objects, runs, batches, deletions
 .state/history/<epoch>-<label>.sqlite.xz.age   one copy per checkpoint; label is the batch number, trash or trash-<folders>, reconcile or report
 .state/session.tar.age                         the Proton CLI session; no history, a stale copy cannot be restored
+.state/reconciled                              the start epoch of the run that last completed a Proton walk, plain text
 ```
 
 | What | Why |
@@ -196,7 +197,7 @@ task status                        # counts and the last run's figures from the 
 task test && task lint             # pytest; ruff check and format check
 task sync                          # one budgeted run, the same thing Actions runs
 task sync -- RUN_BUDGET_MIN=30     # a shorter budget
-task sync -- RECONCILE=true        # force the weekly Proton walk (the literal word true)
+task sync -- RECONCILE=true        # force the weekly Proton walk (true, false or auto)
 task state-rollback                # list the dated history objects
 task state-rollback -- <key>       # copy one of them over the canonical state
 task session-seal -- .run/pd       # encrypt a laptop Proton CLI session into the bucket
@@ -234,10 +235,10 @@ older than seven days are pruned, the same clock as the bucket's history copies.
 - **A run stops on budget every night.** Lower `batch_files` or `batch_gb`; the throughput
   rows say which. A run that checkpointed nothing does not chain and fails instead.
 - **Proton 429s.** The throttling table is the gauge; lower `batch_gb`.
-- **A weekly reconcile does not finish in one run.** Normal on a large tree; it resumes on
-  the next run that reconciles.
+- **A weekly reconcile does not finish in one run.** Normal on a large tree; only a
+  complete walk is recorded, so the next run is due again and resumes it.
 - **A flag seems ignored.** Flags go after the double dash; before it they set a host-side
-  var that never reaches the container. `RECONCILE` takes the literal word `true`.
+  var that never reaches the container. `RECONCILE` takes `true`, `false` or `auto`.
 - **A case-only rename in Dropbox does not reach Proton.** Files are keyed by lowercased
   path. Rename to something else and back if the case matters.
 - **Move the folder in Proton.** Move it anywhere under My files and change the vault's
@@ -264,7 +265,6 @@ unknown keys. It names no account.
 | `budget.disk_headroom_gb` | Free disk the runner must keep beyond a batch's staging |
 | `budget.listing_floor_ratio` | Refuse a listing smaller than this share of the mirrored file count |
 | `proton.walk_workers` | Folder listings in flight during the reconcile walk, each from its own copy of the session |
-| `reconcile.weekday` | UTC weekday (0 is Monday) whose first run does the Proton walk |
 
 The three account identifiers in `op.env` override the TOML keys
 `dropbox.expected_account_id`, `proton.destination` and `proton.expected_destination_uid`,

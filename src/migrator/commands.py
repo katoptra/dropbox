@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import session, statefile
-from .config import Config, load_config
+from .config import load_config
 from .env import Runtime
 from .paths import WorkPaths
 from .state import State
@@ -25,7 +25,7 @@ def clock(runtime: Runtime, args: list[str]) -> int:
     paths = _paths(runtime)
     shutil.rmtree(paths.staging, ignore_errors=True)
     paths.staging.mkdir()
-    for stale in (paths.report, paths.chain):
+    for stale in (paths.report, paths.chain, paths.walked):
         stale.unlink(missing_ok=True)
     started = datetime.fromtimestamp(runtime.run_epoch, UTC)
     stamp = {
@@ -40,23 +40,6 @@ def clock(runtime: Runtime, args: list[str]) -> int:
 
 def read_clock(paths: WorkPaths) -> dict[str, int]:
     return json.loads(paths.clock.read_text(encoding="utf-8"))
-
-
-def is_reconcile_run(
-    cfg: Config, runtime: Runtime, db: State, *, start_epoch: int, weekday: int
-) -> bool:
-    """RECONCILE=true, or the first run that starts on the configured UTC weekday. Keyed
-    on the day, not an hour: chained and queued runs start at any hour."""
-    if runtime.reconcile:
-        return True
-    if weekday != cfg.reconcile.weekday:
-        return False
-    day_start = start_epoch - start_epoch % 86400
-    earlier = db.connection.execute(
-        "SELECT COUNT(*) FROM runs WHERE start_epoch >= ? AND start_epoch < ?",
-        (day_start, start_epoch),
-    ).fetchone()[0]
-    return int(earlier) == 0
 
 
 def session_restore(runtime: Runtime, args: list[str]) -> int:
@@ -81,17 +64,15 @@ def state(runtime: Runtime, args: list[str]) -> int:
     db = State(paths.state_db, cfg.mirror.id)
     try:
         db.initialize_migration(cfg.source_file, cfg.source_sha256)
-        # Decided before this run's row exists, so the row itself cannot count as "earlier".
-        reconcile = is_reconcile_run(
-            cfg, runtime, db, start_epoch=stamp["start_epoch"], weekday=stamp["weekday"]
-        )
         run_id = db.start_run(
             start_epoch=stamp["start_epoch"],
             hour_utc=stamp["hour_utc"],
             weekday=stamp["weekday"],
             budget_minutes=runtime.budget_override or cfg.budget.run_budget_minutes,
             host=runtime.host,
-            reconcile=reconcile,
+            # lib's toolbox `due` decided before this command, by the age of the last
+            # complete walk.
+            reconcile=paths.reconcile.exists(),
         )
         files, size = db.mirror_totals()
     finally:

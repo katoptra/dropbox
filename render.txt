@@ -1,4 +1,21 @@
-task: [clock] mkdir -p /work/.run && rm -f /work/.run/chain && date -u '+%s %H %u' > /work/.run/start.txt
+task: [clock] mkdir -p /work/.run && rm -f /work/.run/chain /work/.run/reconcile && date -u +%s > /work/.run/start.txt
+task: [pull] rc=0; s3 get .state/reconciled /work/.run/reconciled || rc=$?
+case $rc in 0) ;; 3) : > /work/.run/reconciled ;; *) exit $rc ;; esac
+
+task: [due-rule] rm -f /work/.run/reconcile
+r=auto; h=168
+now=$(cat /work/.run/start.txt); last=$(cat /work/.run/reconciled 2>/dev/null || true)
+case $last in ''|0?*|*[!0-9]*) last=0 ;; esac
+case $h in ''|0*|*[!0-9]*) echo "due: RECONCILE_HOURS is a whole number of hours from 1, not $h" >&2; exit 1 ;; esac
+case $r in
+  true) touch /work/.run/reconcile ;;
+  false) ;;
+  auto) test $(( now - last )) -lt $(( h * 3600 - 1800 )) || touch /work/.run/reconcile ;;
+  *) echo "due: RECONCILE is true, false or auto" >&2; exit 1 ;;
+esac
+test "$last" = 0 && ago="none on record" || ago="$(( (now - last) / 3600 )) h ago"
+echo "due: RECONCILE=$r RECONCILE_HOURS=$h, last reconcile $ago: $(test -f /work/.run/reconcile && echo reconciling || echo not this run)"
+
 task: [clock-phase] python -m migrator clock
 task: [session] python -m migrator session
 task: [state] python -m migrator state
@@ -8,6 +25,8 @@ task: [plan-phase] python -m migrator plan
 task: [batches] python -m migrator --apply batches
 task: [trash] python -m migrator --apply trash
 task: [reconcile] python -m migrator --apply reconcile
+task: [reconciled] cp /work/.run/start.txt /work/.run/reconciled
+task: [push] s3 put /work/.run/reconciled .state/reconciled
 task: [report-phase] python -m migrator --apply report
 task: [report-mirror] test -f /work/.run/report.md || python -m migrator --apply report || true
 task: [report-mirror] test ! -f /work/.run/report.md || cat /work/.run/report.md >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"

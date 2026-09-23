@@ -164,6 +164,7 @@ def test_reconcile_drops_missing_missized_and_sha1_mismatched(
         ).fetchone()[0]
         == 1
     )
+    assert ctx.paths.walked.exists()
     fields = _figures_event(ctx.state)
     assert fields["complete"] == 1
     assert fields["snapshot_id"] == snapshot_id
@@ -258,6 +259,7 @@ def test_reconcile_partial_walk_pushes_state_and_touches_nothing(
     assert result.status == "PASS"
     assert result.outputs == {"partial": 1}
     assert pushed == ["1-reconcile"]
+    assert not ctx.paths.walked.exists()
     left = {
         r["path_lower"]
         for r in ctx.state.connection.execute("SELECT * FROM mirror_objects")

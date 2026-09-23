@@ -8,9 +8,10 @@ this mirror includes. This file is what a change must not break.
 
 Nothing in this repo starts a run: an external scheduler dispatches `sync.yml` nightly.
 This mirror includes the toolbox alone: `Taskfile.yml` owns the order, one
-`python -m migrator <command>` per step, and `src/migrator/` owns every decision. The
-infrastructure modules there are from donphi/dropbox_proton at `cfd0e57`, MIT; the phases
-under `src/migrator/phases/` and the Taskfile are this repository's own.
+`python -m migrator <command>` per step, and `src/migrator/` owns every decision but when
+to walk Proton, which is lib's `due`. The infrastructure modules there are from
+donphi/dropbox_proton at `cfd0e57`, MIT; the phases under `src/migrator/phases/` and the
+Taskfile are this repository's own.
 
 ## Must knows
 
@@ -42,8 +43,10 @@ under `src/migrator/phases/` and the Taskfile are this repository's own.
 - **The logs are public.** The report is built from the state and carries counts only;
   errors print as their class unless `MIRROR_VERBOSE=1`; `op run` masks every value.
 - **Run flags go after the double dash** (`task sync -- RUN_BUDGET_MIN=30 RECONCILE=true`,
-  or the workflow's `vars` input); the Taskfile maps them to the environment the migrator
-  reads. `RECONCILE` takes the literal word `true`.
+  or the workflow's `vars` input). The Taskfile maps `RUN_BUDGET_MIN` to the environment
+  the migrator reads; `RECONCILE` (`true`, `false` or `auto`) is lib's `due`'s, which
+  leaves `.run/reconcile` for the migrator when the last complete walk is
+  `RECONCILE_HOURS` (168) old.
 - **`config/mirror.toml` is strict** and rejects unknown keys; the three account
   identifiers come from the environment and override its keys.
 

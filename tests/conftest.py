@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from migrator import crypt, session
-from migrator.config import Budget, Config, Dropbox, Mirror, Proton, Reconcile
+from migrator.config import Budget, Config, Dropbox, Mirror, Proton
 from migrator.env import Runtime
 from migrator.logging import RunLogger
 from migrator.paths import WorkPaths
@@ -66,7 +66,6 @@ def config_factory():
                 ),
             ),
             budget=overrides.get("budget", Budget()),
-            reconcile=overrides.get("reconcile", Reconcile()),
             source_file=source,
             source_sha256="test-config-hash",
         )

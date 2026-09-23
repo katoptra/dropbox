@@ -24,7 +24,6 @@ def test_defaults_and_secrets():
     assert runtime.config_path == Path("config/mirror.toml")
     assert runtime.run_epoch is None
     assert runtime.budget_override is None
-    assert runtime.reconcile is False
     assert set(runtime.secrets()) == {
         "AGE-SECRET-KEY-1TEST",
         "s",
@@ -52,14 +51,12 @@ def test_overrides_and_host():
         **BASE,
         "MIRROR_RUN_EPOCH": "1700000000",
         "RUN_BUDGET_MIN": "30",
-        "RECONCILE": "true",
         "GITHUB_RUN_ID": "42",
         "MIRROR_WORK_DIR": "/tmp/w",
     }
     runtime = Runtime.from_environ(env)
     assert runtime.run_epoch == 1700000000
     assert runtime.budget_override == 30
-    assert runtime.reconcile is True
     assert runtime.host == "github:42"
     assert runtime.work_dir == Path("/tmp/w")
 
