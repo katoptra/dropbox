@@ -14,16 +14,17 @@ version: '3'
 vars:
   RUN_EPOCH:
     sh: date +%s
+  RECONCILE_HOURS: 168   # the full Proton walk, weekly; lib's toolbox `due` counts from the last complete one
 
-# Run-scoped environment for every migrator command. RECONCILE and RUN_BUDGET_MIN are
-# task vars a run sets after the double dash (task sync -- RECONCILE=true
-# RUN_BUDGET_MIN=30, or the workflow's vars input), mapped to the names the migrator
-# reads; unset, they render empty, which it reads as unset. The migrator's work
-# directory and config path are its own defaults, .run and config/mirror.toml, and
-# AWS_REGION is an ENV line in the image, so every in-toolbox command sees it.
+# Run-scoped environment for every migrator command. RUN_BUDGET_MIN is a task var a run
+# sets after the double dash (task sync -- RUN_BUDGET_MIN=30, or the workflow's vars
+# input), mapped to the name the migrator reads; unset, it renders empty, which it reads
+# as unset. RECONCILE, set the same way, is read by the toolbox's `due`, not the
+# migrator. The migrator's work directory and config path are its own defaults, .run and
+# config/mirror.toml, and AWS_REGION is an ENV line in the image, so every in-toolbox
+# command sees it.
 env:
   MIRROR_RUN_EPOCH: '{{.RUN_EPOCH}}'
-  RECONCILE: '{{.RECONCILE}}'
   RUN_BUDGET_MIN: '{{.RUN_BUDGET_MIN}}'
   PROTON_DRIVE_LOG_LEVEL: INFO   # the Proton CLI's own log level; its lines reach the public job log
 
@@ -61,6 +62,7 @@ tasks:
     desc: The full budgeted run, inside the toolbox
     cmds:
       - task: clock
+      - task: due
       - task: clock-phase
       - task: session
       - task: state
@@ -78,6 +80,7 @@ tasks:
     desc: Read-only half of the pipeline, inside the toolbox; prints the report it would make
     cmds:
       - task: clock
+      - task: due
       - task: clock-phase
       - task: session
       - task: state
@@ -97,7 +100,29 @@ tasks:
   plan-phase: { internal: true, cmds: ['python -m migrator plan'] }
   batches:    { internal: true, cmds: ['python -m migrator --apply batches'] }
   trash:      { internal: true, cmds: ['python -m migrator --apply trash'] }
-  reconcile:  { internal: true, cmds: ['python -m migrator --apply reconcile'] }
+  reconcile:
+    internal: true
+    cmds:
+      - python -m migrator --apply reconcile
+      - task: record-walk
+  # Only a complete walk is recorded; a partial one leaves the next run due, and it resumes.
+  record-walk:
+    internal: true
+    status: ['test ! -f {{.RUN}}/walked']
+    cmds: [{ task: reconciled }]
+  # What lib's toolbox `due` and `reconciled` keep .state/reconciled through, as an engine's
+  # pull and push would: one plain object of the bucket, over the image's s3.
+  pull:
+    internal: true
+    requires: { vars: [KEY, OUT, MISSING] }
+    cmds:
+      - |
+        rc=0; s3 get {{.KEY}} {{.OUT}} || rc=$?
+        case $rc in 0) ;; 3) {{.MISSING}} ;; *) exit $rc ;; esac
+  push:
+    internal: true
+    requires: { vars: [FILE, KEY] }
+    cmds: ['s3 put {{.FILE}} {{.KEY}}']
   # Builds .run/report.md from the state, closes the run row, writes the chain marker.
   report-phase: { internal: true, cmds: ['python -m migrator --apply report'] }
   empty-trash-pipeline:

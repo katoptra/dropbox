@@ -169,23 +169,17 @@ class Budget:
 
 
 @dataclass(frozen=True)
-class Reconcile:
-    weekday: int = 0  # the first run that starts on this UTC weekday walks Proton
-
-
-@dataclass(frozen=True)
 class Config:
     mirror: Mirror
     dropbox: Dropbox
     proton: Proton
     budget: Budget
-    reconcile: Reconcile
     source_file: Path
     source_sha256: str
 
 
 _MIRROR_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-SECTIONS = {"mirror", "dropbox", "proton", "budget", "reconcile"}
+SECTIONS = {"mirror", "dropbox", "proton", "budget"}
 # Account-specific values live in the vault (op.env) and override the file, so
 # the committed configuration names no account.
 ENV_OVERRIDES = {
@@ -216,7 +210,6 @@ def load_config(path: str | Path, environ: Mapping[str, str] | None = None) -> C
         dropbox=_section(Dropbox, data.get("dropbox", {}), base, "dropbox"),
         proton=_section(Proton, data.get("proton", {}), base, "proton"),
         budget=_section(Budget, data.get("budget", {}), base, "budget"),
-        reconcile=_section(Reconcile, data.get("reconcile", {}), base, "reconcile"),
         source_file=source,
         source_sha256=sha256_file(source),
     )
@@ -276,5 +269,3 @@ def validate_config(cfg: Config) -> None:
     _nonnegative(cfg.budget.disk_headroom_gb, "budget.disk_headroom_gb")
     if not 0 < cfg.budget.listing_floor_ratio <= 1:
         raise ConfigError("budget.listing_floor_ratio must be in (0, 1]")
-    if type(cfg.reconcile.weekday) is not int or not 0 <= cfg.reconcile.weekday <= 6:
-        raise ConfigError("reconcile.weekday must be 0 (Monday) to 6 (Sunday)")

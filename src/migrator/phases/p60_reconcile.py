@@ -220,6 +220,7 @@ def run(ctx: PhaseContext) -> PhaseResult:
     if stray_folders:
         proton.trash(stray_folders, PHASE)
     statefile.push(ctx.state, ctx.runtime, ctx.paths, store, label=label)
+    ctx.paths.walked.touch()
     ctx.logger.info(
         PHASE,
         "figures",

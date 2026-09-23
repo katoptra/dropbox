@@ -23,7 +23,6 @@ class Runtime:
     config_path: Path
     run_epoch: int | None
     budget_override: int | None
-    reconcile: bool
     verbose: bool
     r2_bucket: str
     age_identity: str
@@ -46,7 +45,6 @@ class Runtime:
             config_path=Path(env.get("MIRROR_CONFIG", "config/mirror.toml")),
             run_epoch=_int(env, "MIRROR_RUN_EPOCH"),
             budget_override=_int(env, "RUN_BUDGET_MIN"),
-            reconcile=env.get("RECONCILE", "").lower() == "true",
             verbose=env.get("MIRROR_VERBOSE", "") == "1",
             r2_bucket=env.get("MIRROR_R2_BUCKET", ""),
             age_identity=env.get("MIRROR_AGE_IDENTITY", ""),

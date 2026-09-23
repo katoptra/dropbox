@@ -43,6 +43,16 @@ class WorkPaths:
         return self.root / "chain"
 
     @property
+    def reconcile(self) -> Path:
+        # lib's toolbox `due` leaves it when this run is to walk Proton.
+        return self.root / "reconcile"
+
+    @property
+    def walked(self) -> Path:
+        # A complete walk leaves it, and the Taskfile then records the reconcile in R2.
+        return self.root / "walked"
+
+    @property
     def age_key(self) -> Path:
         return self.root / "age.key"
 
