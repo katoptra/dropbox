@@ -776,33 +776,37 @@ class _Walk:
         """Returns True when every folder is COMPLETE, False when the deadline stopped
         the walk with folders still pending."""
         self._load_pending()
-        stopped = False
-        with (
-            WorkerSessions(self.p.session_dir, self.workers) as sessions,
-            ThreadPoolExecutor(max_workers=self.workers) as pool,
-        ):
-            while True:
-                self._dispatch(pool, sessions)
-                if not self.in_flight:
-                    break
-                done, _ = wait(self.in_flight, return_when=FIRST_COMPLETED)
-                outcome = self._collect(done)
-                if outcome != "ok" or self._past_deadline():
-                    # Let the listings under way land before deciding anything.
-                    drained = self._collect(set(self.in_flight))
-                    outcome = outcome if outcome != "ok" else drained
-                if outcome == "failed":
-                    raise ProtonCLIError("Proton filesystem_list exhausted retries")
-                if outcome == "auth":
-                    self._rescue(sessions)
-                if self._past_deadline():
-                    stopped = True
-                    break
-            # Without copies the workers shared the real session; one main-thread
-            # write-back covers whatever a refresh changed.
-            if sessions.promote() or not sessions.dirs:
-                self.p._after()
-        return not stopped
+        with WorkerSessions(self.p.session_dir, self.workers) as sessions:
+            try:
+                with ThreadPoolExecutor(max_workers=self.workers) as pool:
+                    return self._loop(pool, sessions)
+            finally:
+                # The pool stopped all its workers before this line. Thus, no worker can
+                # change a token after it. promote puts the newest session copy in the
+                # session directory before WorkerSessions deletes the copies. Thus, if
+                # the walk stops with an error, the changed token stays. Without copies,
+                # all the workers used the one session directory. Then one call on the
+                # main thread sends the session to the bucket if a refresh changed it.
+                if sessions.promote() or not sessions.dirs:
+                    self.p._after()
+
+    def _loop(self, pool: ThreadPoolExecutor, sessions: WorkerSessions) -> bool:
+        while True:
+            self._dispatch(pool, sessions)
+            if not self.in_flight:
+                return True
+            done, _ = wait(self.in_flight, return_when=FIRST_COMPLETED)
+            outcome = self._collect(done)
+            if outcome != "ok" or self._past_deadline():
+                # Let the listings under way land before deciding anything.
+                drained = self._collect(set(self.in_flight))
+                outcome = outcome if outcome != "ok" else drained
+            if outcome == "failed":
+                raise ProtonCLIError("Proton filesystem_list exhausted retries")
+            if outcome == "auth":
+                self._rescue(sessions)
+            if self._past_deadline():
+                return False
 
     def _past_deadline(self) -> bool:
         return self.deadline is not None and time.time() >= self.deadline
