@@ -27,6 +27,14 @@ TEST_ENV = {
 }
 
 
+@pytest.fixture(autouse=True)
+def aws_environment(monkeypatch):
+    """The AWS_* values of TEST_ENV in the environment, where op run puts them. boto3
+    reads them from there. Without them, boto3 asks the EC2 metadata service."""
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL_S3"):
+        monkeypatch.setenv(name, TEST_ENV[name])
+
+
 @pytest.fixture
 def runtime_factory():
     def make(tmp_path: Path, **overrides) -> Runtime:
@@ -34,7 +42,6 @@ def runtime_factory():
             **TEST_ENV,
             "MIRROR_WORK_DIR": str(tmp_path / "run"),
             "MIRROR_CONFIG": str(tmp_path / "mirror.toml"),
-            "MIRROR_RUN_EPOCH": "1700000000",
         }
         env.update({k: str(v) for k, v in overrides.items()})
         return Runtime.from_environ(env)

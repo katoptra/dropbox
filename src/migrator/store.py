@@ -41,17 +41,11 @@ class Store:
             raise StoreError("required secret is unset: AWS_SECRET_ACCESS_KEY")
         if not runtime.aws_endpoint_url:
             raise StoreError("required secret is unset: AWS_ENDPOINT_URL_S3")
+        # boto3 reads the endpoint, the keys and the two checksum settings from the
+        # environment. The image sets the checksum settings, because R2 rejects the
+        # default checksum headers of the SDK.
         return boto3.client(
-            "s3",
-            endpoint_url=runtime.aws_endpoint_url,
-            aws_access_key_id=runtime.aws_access_key_id,
-            aws_secret_access_key=runtime.aws_secret_access_key,
-            # R2 rejects the SDK's default checksum headers.
-            config=Config(
-                request_checksum_calculation="when_required",
-                response_checksum_validation="when_required",
-                retries={"max_attempts": 5, "mode": "standard"},
-            ),
+            "s3", config=Config(retries={"max_attempts": 5, "mode": "standard"})
         )
 
     def get(self, key: str, target: Path) -> bool:

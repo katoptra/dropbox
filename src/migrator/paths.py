@@ -19,6 +19,11 @@ class WorkPaths:
         return self.root / "state.sqlite"
 
     @property
+    def start(self) -> Path:
+        # The clock of the toolbox writes the start epoch of the run here.
+        return self.root / "start.txt"
+
+    @property
     def clock(self) -> Path:
         return self.root / "clock.json"
 

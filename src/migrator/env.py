@@ -21,7 +21,6 @@ def _int(environ: Mapping[str, str], name: str) -> int | None:
 class Runtime:
     work_dir: Path
     config_path: Path
-    run_epoch: int | None
     budget_override: int | None
     verbose: bool
     r2_bucket: str
@@ -43,7 +42,6 @@ class Runtime:
         return cls(
             work_dir=Path(env.get("MIRROR_WORK_DIR", ".run")),
             config_path=Path(env.get("MIRROR_CONFIG", "config/mirror.toml")),
-            run_epoch=_int(env, "MIRROR_RUN_EPOCH"),
             budget_override=_int(env, "RUN_BUDGET_MIN"),
             verbose=env.get("MIRROR_VERBOSE", "") == "1",
             r2_bucket=env.get("MIRROR_R2_BUCKET", ""),

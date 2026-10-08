@@ -10,25 +10,29 @@ from migrator.paths import WorkPaths
 from migrator.state import State
 
 
-def test_clock_writes_stamp_and_clears_outputs(runtime_factory, tmp_path):
-    runtime = runtime_factory(
-        tmp_path, MIRROR_RUN_EPOCH="1700000000"
-    )  # 2023-11-14 22:13 UTC, Tuesday
-    paths = WorkPaths.from_runtime(runtime)
+def _started(paths, epoch=1700000000):
+    """.run/start.txt, as the clock of the toolbox writes it."""
     paths.ensure()
+    paths.start.write_text(f"{epoch}\n", encoding="utf-8")
+
+
+def test_clock_writes_stamp_and_clears_outputs(runtime_factory, tmp_path):
+    runtime = runtime_factory(tmp_path)
+    paths = WorkPaths.from_runtime(runtime)
+    _started(paths)  # 2023-11-14 22:13 UTC, Tuesday
     (paths.staging / "junk").write_text("x", encoding="utf-8")
-    paths.chain.write_text("", encoding="utf-8")
+    paths.report.write_text("", encoding="utf-8")
     paths.walked.write_text("", encoding="utf-8")
     assert commands.clock(runtime, []) == 0
     stamp = json.loads(paths.clock.read_text(encoding="utf-8"))
     assert stamp == {"start_epoch": 1700000000, "hour_utc": 22, "weekday": 1}
-    assert not (paths.staging / "junk").exists() and not paths.chain.exists()
+    assert not (paths.staging / "junk").exists() and not paths.report.exists()
     assert not paths.walked.exists()
 
 
-def test_clock_requires_epoch(runtime_factory, tmp_path):
-    runtime = runtime_factory(tmp_path, MIRROR_RUN_EPOCH="")
-    with pytest.raises(ValueError, match="MIRROR_RUN_EPOCH"):
+def test_clock_requires_the_toolbox_start(runtime_factory, tmp_path):
+    runtime = runtime_factory(tmp_path)
+    with pytest.raises(ValueError, match="start.txt"):
         commands.clock(runtime, [])
 
 
@@ -38,6 +42,7 @@ def test_state_fresh_starts_run_with_budget_override(
     cfg, paths, state, _, runtime = state_context
     state.close()
     paths.state_db.unlink()
+    _started(paths)
     commands.clock(runtime, [])
     monkeypatch.setattr(commands, "Store", lambda runtime, paths: FakeStore())
     monkeypatch.setattr(commands, "load_config", lambda _: cfg)
@@ -56,6 +61,7 @@ def test_state_records_the_toolbox_reconcile_decision(
     cfg, paths, state, _, runtime = state_context
     state.close()
     paths.state_db.unlink()
+    _started(paths)
     commands.clock(runtime, [])
     paths.reconcile.write_text("", encoding="utf-8")
     monkeypatch.setattr(commands, "Store", lambda runtime, paths: FakeStore())

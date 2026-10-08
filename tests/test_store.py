@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from boto3.exceptions import S3UploadFailedError
 from botocore.exceptions import ClientError, EndpointConnectionError
+from conftest import TEST_ENV
 
 from migrator.paths import WorkPaths
 from migrator.store import Store, StoreError
@@ -146,6 +147,13 @@ def test_missing_credential_is_unset_secret_error(runtime_factory, tmp_path, uns
     runtime = runtime_factory(tmp_path, **{**AWS_OVERRIDES, unset: ""})
     with pytest.raises(StoreError, match=unset):
         Store(runtime, WorkPaths.from_runtime(runtime))
+
+
+def test_the_client_gets_its_endpoint_from_the_environment(runtime_factory, tmp_path):
+    # conftest puts the AWS_* values of TEST_ENV in the environment, as op run does.
+    runtime = runtime_factory(tmp_path)
+    store = Store(runtime, WorkPaths.from_runtime(runtime))
+    assert store.client.meta.endpoint_url == TEST_ENV["AWS_ENDPOINT_URL_S3"]
 
 
 def test_boto3_and_botocore_errors_are_store_errors(runtime_factory, tmp_path):

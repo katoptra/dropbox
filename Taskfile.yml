@@ -12,8 +12,6 @@
 version: '3'
 
 vars:
-  RUN_EPOCH:
-    sh: date +%s
   RECONCILE_HOURS: 168   # the full Proton walk, weekly; lib's toolbox `due` counts from the last complete one
 
 # Run-scoped environment for every migrator command. RUN_BUDGET_MIN is a task var a run
@@ -24,7 +22,6 @@ vars:
 # config/mirror.toml, and AWS_REGION is an ENV line in the image, so every in-toolbox
 # command sees it.
 env:
-  MIRROR_RUN_EPOCH: '{{.RUN_EPOCH}}'
   RUN_BUDGET_MIN: '{{.RUN_BUDGET_MIN}}'
   PROTON_DRIVE_LOG_LEVEL: INFO   # the Proton CLI's own log level; its lines reach the public job log
 
@@ -95,8 +92,9 @@ tasks:
       - python -m migrator report   # no --apply: a read-only plan pushes nothing to R2
       - cat {{.RUN}}/report.md
 
-  # The migrator's own stamp, after the toolbox's clock: its start epoch, hour and weekday
-  # to .run/clock.json, and a clean staging, report and chain marker.
+  # The stamp of the migrator, after the clock of the toolbox. It reads the start epoch from
+  # .run/start.txt and writes it, with its hour and weekday, to .run/clock.json. It also
+  # clears staging, the report and the walked marker.
   clock-phase: { internal: true, cmds: ['python -m migrator clock'] }
   state:      { internal: true, cmds: ['python -m migrator state'] }
   inventory:  { internal: true, cmds: ['python -m migrator inventory'] }
