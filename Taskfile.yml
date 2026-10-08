@@ -113,8 +113,10 @@ tasks:
     cmds: [{ task: reconciled }]
   # Builds .run/report.md from the state, closes the run row, writes the chain marker.
   report-phase: { internal: true, cmds: ['python -m migrator --apply report'] }
+  # The empty-trash verb of the engine starts this task by name in the image, through
+  # task op. go-task does not start an internal task from the command line. Thus, this
+  # task is not internal.
   empty-trash-pipeline:
-    internal: true
     cmds:
       - task: clock
       - task: clock-phase
@@ -150,6 +152,9 @@ tasks:
       - python -m pytest
       - ruff check src tests
       - ruff format --check src tests
+      # empty-trash starts empty-trash-pipeline by name in the image. A dry run shows that
+      # go-task accepts that name from the command line.
+      - task --dry empty-trash-pipeline >/dev/null 2>&1 || { echo "empty-trash-pipeline is internal" >&2; exit 1; }
 
   fmt:
     desc: ruff format
