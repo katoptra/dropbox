@@ -24,7 +24,15 @@ class WorkPaths:
 
     @property
     def session(self) -> Path:
+        # The proton engine's `session` puts the CLI session here, in ROOT_DIR/.run.
+        # Thus the work directory must stay .run.
         return self.root / "session"
+
+    @property
+    def session_sha(self) -> Path:
+        # The proton engine's `session` writes it. `session.writeback` writes it again
+        # when it sends a changed session to R2.
+        return self.root / "session.sha"
 
     @property
     def staging(self) -> Path:
