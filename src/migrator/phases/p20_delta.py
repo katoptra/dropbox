@@ -10,8 +10,9 @@ PHASE = "20_delta"
 
 
 def display_paths(connection: sqlite3.Connection, inventory_id: int) -> dict[str, str]:
-    """path_lower -> NFC display path. A file's own path_display can carry stale
-    parent casing in recursive listings, so parents come from the folder entries."""
+    """path_lower -> the NFC display path. In a recursive listing, the path_display of a
+    file can have previous uppercase and lowercase letters in the name of a parent.
+    Thus, this function gets the names of the parents from the folder entries."""
     folders = {
         str(row["path_lower"]): str(row["path_display"])
         for row in connection.execute(
@@ -67,8 +68,9 @@ def run(ctx: PhaseContext) -> PhaseResult:
         )
     display = display_paths(connection, inventory_id)
     with connection:
-        # This run's delta is the only delta: earlier runs' rows were consumed by their
-        # own plan and trash steps and would otherwise ride along in every checkpoint.
+        # The delta of this run is the only delta. The plan and trash steps of the
+        # previous runs used their rows. If these rows stay, each checkpoint sends them
+        # to R2 again.
         connection.execute("DELETE FROM delta_changed")
         connection.execute("DELETE FROM delta_deleted")
         changed = connection.execute(

@@ -1,6 +1,6 @@
-# The check workflow of lib, on one runner with one pull of the image. It renders the
-# pipeline and compares it with render.txt. Then it runs the offline verb: the tests and
-# the lint.
+# This workflow uses the check workflow of lib, on one runner with one pull of the image.
+# It makes a render of the pipeline and compares it with render.txt. Then it runs the
+# offline verb: the tests and the lint.
 name: check
 on: {pull_request: {}}
 permissions: {contents: read}

@@ -21,12 +21,12 @@ def test_every_operator_task_is_in_the_menu():
     text = TASKFILE.read_text(encoding="utf-8")
     menu = text[text.index("MENU:") : text.index("\ntasks:")]
     listed = set(re.findall(r"task ([a-z][a-z0-9-]*)", menu))
-    # The toolbox's own menu lines carry pipeline and plan-pipeline, as sync and plan.
+    # The menu lines of the toolbox show pipeline and plan-pipeline, as sync and plan.
     expected = _tasks_with_desc(text[text.index("\ntasks:") :]) - {
         "pipeline",
         "plan-pipeline",
     }
-    # A parsing regression that returns an empty set would make the subset
-    # check below pass vacuously and hide every missing task.
+    # If a regression in the parser returns an empty set, the subset check below is
+    # correct with no data, and it hides each missing task.
     assert expected
     assert expected <= listed, sorted(expected - listed)

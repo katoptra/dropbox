@@ -21,16 +21,17 @@ from .p40_batches import should_start
 
 PHASE = "50_trash"
 now = time.time
-# ponytail: a checkpoint snapshots, compresses and pushes the whole state, about a
-# minute at today's size, so one every 50 folders (roughly twelve minutes of listing
-# and trashing) keeps that under a tenth of the phase. A run cut off mid-phase loses
-# the bookkeeping of at most 50 folders; their files are re-listed next run and come
-# back NOT_FOUND.
+# ponytail: a checkpoint makes a snapshot of the full state, compresses it and pushes
+# it. This takes about one minute, and the time increases with the size of the state.
+# One checkpoint for each 50 folders (about twelve minutes of listings and trash calls)
+# keeps this time below one tenth of the phase. If a run stops in this phase, it loses
+# the records of at most 50 folders. The next run lists their files again and gets
+# NOT_FOUND for them.
 CHECKPOINT_EVERY = 50
-# ponytail: one `filesystem trash` call resolves its paths one after another at about
-# two seconds each against a 300 s command timeout that a mutation never retries, so
-# a call carries at most 50 paths (about 100 s). The ceiling is the CLI's per-path
-# cost; the upgrade path is trashing by node UID once the CLI accepts one.
+# ponytail: one `filesystem trash` call finds its paths one after the other, at about
+# two seconds for each path, against a command timeout of 300 s. Thus, a call has at
+# most 50 paths (about 100 s). The ceiling is the time of the CLI for each path. The
+# upgrade path: trash by node UID when the CLI accepts a UID.
 TRASH_CHUNK = 50
 
 
@@ -70,9 +71,10 @@ def run(ctx: PhaseContext) -> PhaseResult:
     )
     proton.root_uid(PHASE)
     units = _units(ctx, rows)
-    # A reorganized Dropbox can leave tens of thousands of files to trash, far more
-    # than one run holds: the phase works unit by unit inside the run's budget, drops
-    # each unit's mirror rows as it goes, and leaves the rest to the next run.
+    # If files in Dropbox move to new folders, tens of thousands of files can go to the
+    # trash. That is much more than one run can do. Thus, the phase does one unit at a
+    # time, in the budget of the run. It deletes the mirror rows of each unit when the
+    # unit is complete, and the next run does the remaining units.
     budget = int(run["budget_minutes"]) * 60
     start_epoch = int(run["start_epoch"])
     label = history_label(ctx)
@@ -128,11 +130,16 @@ def run(ctx: PhaseContext) -> PhaseResult:
 
 
 def _units(ctx: PhaseContext, rows: list) -> list[tuple[tuple[str, str | None], list]]:
-    """The work, one unit per trash call sequence: a folder unit `(parent, name)` is a
-    topmost directory the mirror holds nothing live under, so one call on the folder
-    node takes every deleted file beneath it; a file unit `(parent, None)` holds the
-    deleted files of a directory that still has live files. Folder units come first:
-    a reorganization moves whole trees, and they are where the files are."""
+    """The work, as units. Each unit is a sequence of trash calls:
+
+    - A folder unit `(parent, name)` is a topmost directory that has no remaining file
+      of the mirror. One call on the folder node moves each deleted file in it to the
+      trash.
+    - A file unit `(parent, None)` holds the deleted files of a directory that has
+      remaining files.
+
+    The folder units are first: a reorganization moves full trees, and most of the files
+    are in them."""
     destination = ctx.cfg.proton.destination
     deleted = {str(row["path_lower"]): row for row in rows}
     live = sorted(
@@ -150,7 +157,7 @@ def _units(ctx: PhaseContext, rows: list) -> list[tuple[tuple[str, str | None], 
     dirs: set[str] = set()
     for path in deleted:
         parent = PurePosixPath(path).parent
-        while parent != parent.parent:  # never the destination itself
+        while parent != parent.parent:  # the destination is not a unit
             dirs.add(f"{parent}/")
             parent = parent.parent
     gone = {d for d in dirs if not occupied(d)}
@@ -172,13 +179,15 @@ def _units(ctx: PhaseContext, rows: list) -> list[tuple[tuple[str, str | None], 
 def _trash_unit(
     ctx: PhaseContext, proton, parent: str, name: str | None, group: list
 ) -> Counter[str]:
-    """One unit: list its parent, trash what is still there call by call, record each
-    row, and drop the mirror rows of the files trashed or already gone."""
+    """One unit: list its parent, move to the trash the nodes that are there, one call
+    at a time, and record each row. Then delete the mirror rows of the files that went
+    to the trash or that were not there."""
     counts: Counter[str] = Counter()
     try:
         by_name = resolve_children(proton, parent, PHASE)
     except ProtonCLIError:
-        # The files may well still be there: keep their state rows so tomorrow retries.
+        # The files can be there. Thus, keep their state rows, and the next run tries
+        # again.
         for row in group:
             _record(ctx, row, "LISTING_FAILED", None)
         counts["listing_failed"] += len(group)
@@ -193,10 +202,10 @@ def _trash_unit(
     counts["not_found"] += len(gone)
     _drop(ctx, gone)
     for targets, hits in calls:
-        # ponytail: the trash call returning is taken as evidence; the folder is not
-        # re-listed to prove each node is gone. The ceiling is one folder listing per
-        # trash call saved, and reconcile is the backstop: a node still present comes
-        # back as a stray on the next weekly walk.
+        # ponytail: if the trash call completes, the phase accepts that as proof. It
+        # does not list the folder again to make sure that each node is gone. The
+        # ceiling: this saves one folder listing for each trash call, and reconcile is
+        # the backstop. If a node stays there, the next weekly walk finds it as a stray.
         proton.trash(targets, PHASE)
         for row, uid in hits:
             _record(ctx, row, "TRASHED", uid)
@@ -207,17 +216,18 @@ def _trash_unit(
 
 
 def _plan_files(by_name: dict, parent: str, group: list) -> tuple[list, list]:
-    """Each deleted file by name, the recorded UID choosing among twins; the targets
-    in chunks of TRASH_CHUNK, each with the rows it settles."""
+    """Each deleted file by name, and the recorded UID selects one of the twins. The
+    targets are in chunks of TRASH_CHUNK, each chunk with the rows that it completes."""
     hits = []
     gone = []
     for row in group:
         name = PurePosixPath(str(row["path_display"])).name
         candidates = by_name.get(name, [])
         files = [n for n in candidates if _kind(n) == "file"]
-        # The UID recorded when the file was mirrored names the exact node. Under a
-        # genuine Proton duplicate the name alone would pick either twin, and trashing
-        # the wrong one loses the mirrored copy and leaves a stray behind.
+        # The UID that the mirror recorded for the file names the correct node. If
+        # Proton has a duplicate, the name alone can select the incorrect twin. A trash
+        # call on the incorrect twin moves the copy of the mirror to the trash, and the
+        # other twin stays as a stray.
         node = next(
             (n for n in files if str(unwrap(n.get("uid"))) == row["proton_uid"]),
             next(iter(files), None),
@@ -237,8 +247,9 @@ def _plan_files(by_name: dict, parent: str, group: list) -> tuple[list, list]:
 def _plan_folder(
     by_name: dict, parent: str, name: str, group: list
 ) -> tuple[list, list]:
-    """The folder node itself, every twin of it: nothing live is on record beneath
-    that name, so whatever any twin holds is a stray reconcile would trash anyway."""
+    """The folder node, and each twin of it. No remaining file of the mirror is in a
+    folder of that name. Thus, all that a twin holds is a stray, and reconcile also
+    moves a stray to the trash."""
     candidates = by_name.get(name, [])
     targets = [
         child_cli_path(parent, name, str(unwrap(n["uid"])), len(candidates) > 1)

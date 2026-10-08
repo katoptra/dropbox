@@ -20,8 +20,9 @@ from ..state import State
 
 
 class ProtonCLIError(RuntimeError):
-    """`category` is the attempt's response category when a mutation raised it, so a
-    caller can tell an authentication failure, which no retry helps, from the rest."""
+    """`category` is the response category of the attempt, if a mutation raised this
+    error. Thus, a caller can know the difference between an authentication failure,
+    which a retry cannot correct, and the other errors."""
 
     def __init__(self, message: str, category: str = "") -> None:
         super().__init__(message)
@@ -75,13 +76,14 @@ def _category(stderr: str, returncode: int) -> str:
 
 
 def section_root(destination: str) -> str:
-    """`/my-files/Dropbox/x` -> `/my-files`: the CLI section a node UID is resolved in."""
+    """`/my-files/Dropbox/x` -> `/my-files`: the CLI section in which the CLI finds a
+    node UID."""
     return "/" + destination.strip("/").split("/", 1)[0]
 
 
 @dataclass(frozen=True)
 class Attempt:
-    """One CLI invocation as the state records it."""
+    """One CLI call, as the state records it."""
 
     argv: list[str]
     attempt: int
@@ -97,14 +99,17 @@ SESSION_FILE = "auth-session.json"
 
 
 class WorkerSessions:
-    """One private copy of the CLI session directory per walk worker.
+    """One private copy of the CLI session directory for each walk worker.
 
-    The CLI refreshes its token only on a 401, rotates it, and a refresh the server
-    rejects signs that copy out by deleting its session file. Workers therefore never
-    share a session file: the copy a successful refresh rewrote is adopted afterwards
-    (`promote`), and every worker is re-seeded from it before the losers retry. Each
-    copy also carries the CLI's on-disk crypto and entity caches, so a worker starts
-    warm with whatever the run has already decrypted."""
+    The CLI refreshes its token only after a 401, and the refresh changes the token. If
+    the server rejects a refresh, the CLI signs out of that copy and deletes its session
+    file. Thus, two workers do not use the same session file. After a refresh that the
+    server accepted, `promote` puts the copy that the refresh wrote in the session
+    directory. Then `reseed` writes that copy to each worker before the losers try
+    again.
+
+    Each copy also has the crypto and entity caches of the CLI on disk. Thus, a worker
+    starts with all the data that the run decrypted before."""
 
     def __init__(self, session_dir: Path | None, count: int) -> None:
         self.session_dir = session_dir
@@ -135,7 +140,7 @@ class WorkerSessions:
         return {**os.environ, "PROTON_DRIVE_CACHE_DIR": str(self.dirs[worker])}
 
     def promote(self) -> bool:
-        """Adopt the newest surviving session copy into the main directory."""
+        """Put the newest session copy that exists in the session directory."""
         if self.session_dir is None:
             return False
         candidates = [
@@ -143,10 +148,11 @@ class WorkerSessions:
         ]
         if not candidates:
             return False
-        # ponytail: newest write wins. Two workers refreshing in the same instant would
-        # both hold valid tokens and the older copy's is silently dropped; the CLI does
-        # not say which token the server considers current, so there is nothing better
-        # to compare until it does.
+        # ponytail: the newest file wins. If two workers do a refresh at the same time,
+        # each can hold a token that the server accepts, and this method ignores the
+        # token of the earlier copy without a message. The CLI does not tell which token
+        # the server accepts. Thus, there is no better value to compare. The upgrade
+        # path: when the CLI gives this data, compare the tokens.
         newest = max(candidates, key=lambda f: f.stat().st_mtime_ns)
         main = self.session_dir / SESSION_FILE
         content = newest.read_bytes()
@@ -216,12 +222,14 @@ class ProtonCLIProvider:
         on_start: Callable[[list[str], int], int] | None = None,
         on_end: Callable[[int, Attempt], None] | None = None,
     ) -> tuple[str | None, list[Attempt]]:
-        """Runs argv under the provider's retry policy: exponential backoff, no retry
-        after an authentication failure. Returns (stdout, attempts); stdout is None when
-        the attempts were exhausted. `on_start`/`on_end` observe each attempt as it
-        happens; a worker thread passes neither and the caller records afterwards.
-        `writeback=False` skips the shared session's write-back after each call: the
-        walk owns it, and only the main thread may push the session."""
+        """Runs argv with the retry policy of the provider: an exponential backoff, and
+        no retry after an authentication failure. Returns (stdout, attempts). stdout is
+        None if no attempt got a SUCCESS result.
+
+        `on_start` and `on_end` see each attempt when it occurs. A worker thread gives
+        no observer, and the caller records the attempts after the call. With
+        `writeback=False`, this method does not write the shared session back after each
+        call. The walk does that, and only the main thread can push the session."""
         delay = self.cfg.proton.initial_backoff_seconds
         made: list[Attempt] = []
         for attempt in range(1, attempts + 1):
@@ -284,8 +292,8 @@ class ProtonCLIProvider:
                 provider_category="TIMEOUT",
             )
         elif record.category == "AUTH":
-            # A dead session is not a transient failure: retrying it only delays the
-            # loud stop the operator has to act on.
+            # A session that the server rejects is not a temporary failure. A retry only
+            # adds time before the stop, and the operator must correct the session.
             self.logger.error(
                 phase,
                 operation,
@@ -305,7 +313,7 @@ class ProtonCLIProvider:
             )
 
     def _record(self, phase: str, operation: str, records: list[Attempt]) -> None:
-        """Main-thread bookkeeping for attempts a worker made without observers."""
+        """Records, on the main thread, the attempts of a worker without observers."""
         for record in records:
             command_id = self.state.record_command_start(
                 "proton",
@@ -410,10 +418,10 @@ class ProtonCLIProvider:
         reuse_complete: bool = True,
         deadline: float | None = None,
     ) -> int:
-        """Walks the destination folder by folder into a proton_snapshots row. The queue
-        of folders lives in proton_folders, so a walk the deadline or a killed run cut
-        short resumes where it stopped. Returns the snapshot id; its status says whether
-        the walk completed."""
+        """Walks the destination, one folder at a time, into a proton_snapshots row. The
+        queue of folders is in proton_folders. Thus, if the deadline or a stopped run
+        ends a walk, the next walk continues from the folder where it stopped. Returns
+        the snapshot id. The status of the snapshot tells if the walk is complete."""
         snapshot_id = self._open_snapshot(purpose, reuse_complete)
         if snapshot_id is None:
             return self._latest_complete(purpose)
@@ -434,8 +442,8 @@ class ProtonCLIProvider:
         return int(row["id"])
 
     def _open_snapshot(self, purpose: str, reuse_complete: bool) -> int | None:
-        """The RUNNING snapshot to resume, a new one, or None when a COMPLETE walk may
-        be reused."""
+        """The RUNNING snapshot to continue, a new snapshot, or None if the caller can
+        use a COMPLETE walk again."""
         connection = self.state.connection
         version = self.version()
         row = connection.execute(
@@ -493,8 +501,9 @@ class ProtonCLIProvider:
             )
 
     def list_path(self, folder: Any) -> str:
-        """The root is addressed by its configured name path; every folder below it by
-        UID, which the CLI resolves in one lookup instead of listing each ancestor."""
+        """The root has its configured name path as its address, and each folder below
+        the root has its UID. The CLI finds a UID in one lookup, and does not list each
+        ancestor."""
         if folder["uid"] == "__ROOT__":
             return str(folder["cli_path"])
         return f"{section_root(self.cfg.proton.destination)}/{folder['uid']}"
@@ -502,8 +511,8 @@ class ProtonCLIProvider:
     def _commit_listing(
         self, snapshot_id: int, folder: Any, children: list[dict[str, Any]]
     ) -> list[str]:
-        """Records a folder's children and marks it COMPLETE. Returns the UIDs of the
-        subfolders this listing added to the queue."""
+        """Records the children of a folder and marks the folder COMPLETE. Returns the
+        UIDs of the subfolders that this listing added to the queue."""
         connection = self.state.connection
         cli_path = str(folder["cli_path"])
         parent_uid = str(folder["uid"])
@@ -561,8 +570,9 @@ class ProtonCLIProvider:
                         claimed_mtime,
                         sha1,
                         int(bool(sha1_verified)) if sha1_verified is not None else None,
-                        # Every field reconcile reads is its own column; the node's raw
-                        # JSON would be half the state and nothing reads it back.
+                        # Each field that reconcile reads has its own column. The raw
+                        # JSON of the node can be half of the state, and no step reads
+                        # it.
                         "{}",
                     ),
                 )
@@ -645,9 +655,10 @@ class ProtonCLIProvider:
         *,
         accepted: frozenset[int] = frozenset({0}),
     ) -> str:
-        """Runs a mutating CLI call under a bounded retry: a timeout or a failure that
-        is not an authentication failure is tried again after a backoff, up to
-        `mutation_max_attempts`; the last attempt's failure is the one raised."""
+        """Runs a CLI call that changes Proton, and tries it again after an error. After
+        a timeout, or after a failure that is not an authentication failure, it tries
+        the call again after a backoff, up to `mutation_max_attempts` times. It raises
+        the failure of the last attempt."""
         attempts = self.cfg.proton.mutation_max_attempts
         delay = self.cfg.proton.initial_backoff_seconds
         for attempt in range(1, attempts + 1):
@@ -694,8 +705,9 @@ class ProtonCLIProvider:
                 self._after()
         except subprocess.TimeoutExpired as exc:
             self.state.record_command_end(command_id, -1, "TIMEOUT")
-            # The CLI prints nothing on stdout until it finishes, so its stderr tail
-            # is the only account of a stalled transfer; the state carries it to R2.
+            # The CLI writes nothing to stdout before it completes. Thus, the end of its
+            # stderr is the only data about a transfer that stopped. The state keeps
+            # this text and sends it to R2.
             stderr = exc.stderr or ""
             if isinstance(stderr, bytes):
                 stderr = stderr.decode("utf-8", "replace")
@@ -729,10 +741,10 @@ class ProtonCLIProvider:
                 category,
             )
         if result.returncode != 0:
-            # An accepted non-zero exit means the CLI handled some items and refused
-            # others; confirm reads the upload summary's counts as one batch-wide
-            # verdict, and this log line is the only account of why the exit was
-            # non-zero.
+            # An accepted exit code that is not zero tells that the CLI did some items
+            # and refused others. confirm reads the counts of the upload summary as one
+            # result for the full batch. Only this log line tells the cause of that exit
+            # code.
             self.logger.warning(
                 phase,
                 operation,
@@ -744,14 +756,15 @@ class ProtonCLIProvider:
 
 
 class _Walk:
-    """The folder walk behind `ProtonCLIProvider.inventory`: N workers, each listing
-    one folder per CLI process from its own session copy.
+    """The folder walk of `ProtonCLIProvider.inventory`: N workers. Each worker lists
+    one folder in each CLI process, from its own session copy.
 
-    A child folder is queued to the worker that listed its parent, so that worker
-    already holds the parent's decrypted keys in its cache; a worker with an empty queue
-    steals from the longest one. ponytail: queues are rebuilt from PENDING rows at
-    start, spread by the top-level folder name, so a resumed walk starts with cold
-    locality that inheritance restores as it goes."""
+    A child folder goes into the queue of the worker that listed its parent. Thus, that
+    worker has the decrypted keys of the parent in its cache. A worker with an empty
+    queue takes folders from the longest queue. ponytail: at the start, the walk makes
+    the queues again from the PENDING rows, by the name of the top-level folder. Thus, a
+    walk that continues starts without these keys in the caches. The child rule above
+    fills the caches again during the walk."""
 
     RESCUES = 3
 
@@ -773,8 +786,8 @@ class _Walk:
         self.rescues = 0
 
     def run(self) -> bool:
-        """Returns True when every folder is COMPLETE, False when the deadline stopped
-        the walk with folders still pending."""
+        """Returns True if all the folders are COMPLETE. Returns False if the deadline
+        stopped the walk with folders in the PENDING status."""
         self._load_pending()
         with WorkerSessions(self.p.session_dir, self.workers) as sessions:
             try:
@@ -798,7 +811,7 @@ class _Walk:
             done, _ = wait(self.in_flight, return_when=FIRST_COMPLETED)
             outcome = self._collect(done)
             if outcome != "ok" or self._past_deadline():
-                # Let the listings under way land before deciding anything.
+                # Collect all the listings in progress before the decisions below.
                 drained = self._collect(set(self.in_flight))
                 outcome = outcome if outcome != "ok" else drained
             if outcome == "failed":
@@ -857,8 +870,9 @@ class _Walk:
             self.in_flight[future] = (worker, folder)
 
     def _collect(self, done: set[Future[Any]]) -> str:
-        """Commits finished listings. Returns "ok", "auth" (a worker's session died) or
-        "failed" (a listing exhausted its retries)."""
+        """Commits the listings that the workers completed. Returns "ok", "auth" (the
+        server rejected the session of a worker) or "failed" (a listing used all its
+        retries)."""
         outcome = "ok"
         for future in done:
             worker, folder = self.in_flight.pop(future)
@@ -897,7 +911,8 @@ class _Walk:
         return outcome
 
     def _rescue(self, sessions: WorkerSessions) -> None:
-        """A worker's refresh lost the race: adopt the copy that won, re-seed the rest."""
+        """The refresh of a worker did not win the race: put the copy that won in the
+        session directory, and write it to the other copies."""
         self.rescues += 1
         if self.rescues > self.RESCUES:
             raise ProtonCLIError("Proton session could not be recovered for the walk")

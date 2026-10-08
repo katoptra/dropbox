@@ -29,8 +29,9 @@ TEST_ENV = {
 
 @pytest.fixture(autouse=True)
 def aws_environment(monkeypatch):
-    """The AWS_* values of TEST_ENV in the environment, where op run puts them. boto3
-    reads them from there. Without them, boto3 asks the EC2 metadata service."""
+    """Put the AWS_* values of TEST_ENV in the environment, where op run puts them.
+    boto3 reads them from there. If they are not there, boto3 sends a request to the EC2
+    metadata service."""
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL_S3"):
         monkeypatch.setenv(name, TEST_ENV[name])
 
@@ -98,7 +99,7 @@ def state_context(tmp_path, config_factory, runtime_factory):
 
 
 class FakeStore:
-    """In-memory stand-in for migrator.store.Store."""
+    """A replacement for migrator.store.Store, in memory."""
 
     def __init__(self):
         self.objects: dict[str, bytes] = {}
@@ -123,7 +124,7 @@ class FakeStore:
 
 
 class FakeDropbox:
-    """Stand-in for DropboxAPIProvider.download: canned bytes keyed by path_lower."""
+    """A replacement for DropboxAPIProvider.download: fixed bytes by path_lower."""
 
     def __init__(self, files: dict[str, bytes], missing=()):
         self.files = {k.lower(): v for k, v in files.items()}
@@ -142,7 +143,8 @@ class FakeDropbox:
 
 @pytest.fixture
 def plain_crypt(monkeypatch):
-    # age is exercised in the image build; here encryption is identity so tar bytes are inspectable.
+    # The image build tests age. Here, the encryption does not change the bytes. Thus, a
+    # test can examine the tar bytes.
     monkeypatch.setattr(
         crypt,
         "encrypt",
@@ -190,9 +192,10 @@ def seed_api_inventory(state, purpose, rows):
 
 
 class FakeProton:
-    """Stand-in for ProtonCLIProvider: canned listings, an `upload_tree` that reports on
-    what it was actually handed. `skip` and `fail` are file names the CLI would report as
-    content-identical or refused; set them on the instance before calling `upload_tree`."""
+    """A replacement for ProtonCLIProvider: fixed listings, and an `upload_tree` that
+    reports on the files that it got. `skip` and `fail` are file names that the CLI
+    reports as the same content or as refused. Set them on the instance before the test
+    uses `upload_tree`."""
 
     def __init__(self, listings: dict[str, list[dict]], fail_list=()):
         self.listings = listings

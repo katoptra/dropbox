@@ -16,15 +16,16 @@ from .store import Store
 
 STATE_KEY = ".state/state.sqlite.xz.age"
 HISTORY_PREFIX = ".state/history/"
-# The snapshot compresses as independent slices, one xz stream each, across every
-# core; xz permits concatenated streams and lzma reads them back as one file, so the
-# object's format is unchanged and every history copy stays readable either way.
+# The snapshot compresses as slices, one xz stream for each slice, independently on all
+# the cores. xz lets a file contain a series of streams, and lzma reads them back as one
+# file. Thus, the object keeps its format, and lzma can read each history copy, with one
+# stream or with many streams.
 CHUNK_BYTES = 64 * 1024 * 1024
 
 
 def fetch(runtime: Runtime, paths: WorkPaths, store: Store) -> str:
-    """Restore state.sqlite from R2. A missing object is an empty mirror only on the
-    first run ever, which is when the history prefix is empty as well."""
+    """Download and decrypt state.sqlite from R2. A missing object is an empty mirror
+    only on the first run of the mirror, when the history prefix is also empty."""
     encrypted = paths.root / "state.sqlite.xz.age"
     try:
         if not store.get(STATE_KEY, encrypted):
@@ -33,7 +34,8 @@ def fetch(runtime: Runtime, paths: WorkPaths, store: Store) -> str:
                     "state object is missing but history exists; a lost state must never "
                     "be mistaken for an empty mirror. Roll back with `task state-rollback`."
                 )
-            store.probe()  # "fresh" is only believable from a bucket that answers
+            # The result "fresh" is correct only if the bucket answers.
+            store.probe()
             return "fresh"
         compressed = paths.root / "state.sqlite.xz"
         try:
@@ -62,19 +64,21 @@ def push(
         crypt.encrypt(runtime.age_identity, paths.age_key, compressed, encrypted)
         history_key = f"{HISTORY_PREFIX}{label}.sqlite.xz.age"
         store.put(encrypted, history_key)
-        store.copy(
-            history_key, STATE_KEY
-        )  # server-side; the blob crosses the wire once
+        # A copy on the server: the object goes through the network only one time.
+        store.copy(history_key, STATE_KEY)
     finally:
         for path in (snapshot, compressed, encrypted):
             path.unlink(missing_ok=True)
 
 
 def _compress(source_path: Path, target_path: Path) -> None:
-    """One xz stream per CHUNK_BYTES slice, compressed in parallel, written in order.
-    preset 1 compresses the state in seconds where 6 takes minutes, for objects about a
-    third larger; every checkpoint pays this once. At most a core's worth of slices is
-    in flight, so memory stays a few slices rather than the whole state."""
+    """One xz stream for each slice of CHUNK_BYTES. The slices compress in parallel, and
+    this function writes them in sequence. With preset 1, the state compresses in
+    seconds, but with preset 6, it compresses in minutes. The objects of preset 1 are
+    about one third larger. Each checkpoint compresses the state one time.
+
+    At most about one slice for each core is in progress. Thus, the memory holds some
+    slices, not the full state."""
     window = os.cpu_count() or 1
     pending: deque = deque()
     with (

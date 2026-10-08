@@ -124,7 +124,8 @@ class RunLogger:
         phase_name = re.sub(r"[^A-Za-z0-9_.-]", "_", phase)
         self._append(self.logs_dir / "phases" / f"{phase_name}.log", detailed + "\n")
         if self.console:
-            # Console output reaches CI logs; identifiers are mirrored path names.
+            # The console output goes to the CI log. The identifiers are the path names
+            # of the mirror.
             print(human)
         if self.sink:
             self.sink(event)

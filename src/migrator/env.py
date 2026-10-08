@@ -58,8 +58,8 @@ class Runtime:
         )
 
     def secrets(self) -> list[str]:
-        """Every value that must never reach a log: credentials, and the
-        identifiers that name the accounts (the repo and its logs are public)."""
+        """All the values that must not go into a log: the credentials, and the
+        identifiers that name the accounts. The repository and its logs are public."""
         values = (
             self.age_identity,
             self.dropbox_app_secret,

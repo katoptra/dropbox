@@ -8,15 +8,15 @@ from ..providers.dropbox_auth import access_token
 from .base import PhaseContext, PhaseResult
 
 PHASE = "10_inventory"
-# inventory-run table -> the tables keyed by its id
+# the table of inventory runs -> the tables that use its id as a key
 _INVENTORY_TABLES = {
     "dropbox_inventory_runs": ("dropbox_objects", "dropbox_pages"),
 }
 
 
 def prune_inventories(connection: sqlite3.Connection, keep: int = 1) -> int:
-    """Old listings are the bulk of the state, and every checkpoint ships the state to R2;
-    nothing reads a listing but the run that made it."""
+    """Previous listings are the largest part of the state, and each checkpoint sends
+    the state to R2. Only the run that made a listing reads it."""
     pruned = 0
     with connection:
         for runs_table, child_tables in _INVENTORY_TABLES.items():
@@ -36,14 +36,15 @@ def prune_inventories(connection: sqlite3.Connection, keep: int = 1) -> int:
     return pruned
 
 
-# The bucket expires the state's history copies after this many days; the log rows
-# inside the state follow the same clock.
+# The bucket deletes the history copies of the state after this number of days. The log
+# rows in the state use the same limit.
 HISTORY_DAYS = 7
 
 
 def prune_history(connection: sqlite3.Connection, days: int = HISTORY_DAYS) -> int:
-    """Events and commands older than `days`, except the reconcile figures the report
-    reads from the latest complete walk, which may be weeks old."""
+    """Delete the events and the commands from before the last `days` days. But it keeps
+    the reconcile figures of the last complete walk, which the report reads. These
+    figures can be from some weeks before."""
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with connection:
         events = connection.execute(
@@ -58,10 +59,13 @@ def prune_history(connection: sqlite3.Connection, days: int = HISTORY_DAYS) -> i
 
 
 def recase_display_paths(connection: sqlite3.Connection, inventory_id: int) -> int:
-    """Dropbox cases path_display per entry, so the entries of one folder disagree about
-    their parents' spelling; a folder row's own name is that folder's one spelling.
-    Every entry's path_display is rebuilt from its ancestors' names plus its own, so the
-    tree that reaches staging and Proton spells each folder one way."""
+    """Dropbox sets the uppercase and lowercase letters of path_display for each entry.
+    Thus, in the entries of one folder, the names of the parents can have different
+    letters. The name in the row of a folder is the correct name of that folder.
+
+    This function makes the path_display of each entry again, from the names of its
+    ancestors and its own name. Thus, the tree in staging and in Proton has one name for
+    each folder."""
     rows = connection.execute(
         "SELECT rowid, path_lower, path_display, name, tag FROM dropbox_objects WHERE inventory_id=?",
         (inventory_id,),
@@ -98,9 +102,10 @@ def run(ctx: PhaseContext) -> PhaseResult:
     api = DropboxAPIProvider(ctx.cfg, ctx.state, ctx.logger, token=token)
     inventory_id = api.inventory(purpose, reuse_complete=True)
     with ctx.state.connection:
-        # A file Dropbox lists as downloadable but without a content hash cannot be
-        # verified, so it cannot be mirrored; count it with the non-downloadable ones
-        # instead of letting it hold "percent mirrored" under 100 forever.
+        # If Dropbox lists a file as downloadable but without a content hash, verify
+        # cannot examine it, and the mirror cannot copy it. Thus, this statement counts
+        # it with the files that are not downloadable. If not, it keeps "percent
+        # mirrored" below 100 for all time.
         unhashed = ctx.state.connection.execute(
             "UPDATE dropbox_objects SET is_downloadable=0 WHERE inventory_id=? AND tag='file' "
             "AND is_downloadable=1 AND (content_hash IS NULL OR size IS NULL)",

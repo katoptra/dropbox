@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 
 class GuardError(ValueError):
-    """Raised when an external identity or path fails a safety guard."""
+    """The error if a safety guard rejects an external identity or a path."""
 
 
 def validate_dropbox_base_url(value: str, *, expected_host: str, label: str) -> None:

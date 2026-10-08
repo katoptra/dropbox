@@ -9,8 +9,9 @@ PHASE = "30_plan"
 
 
 def pack(rows: list[Any], batch_bytes: int, batch_files: int) -> list[list[Any]]:
-    """Greedy first-fit in path order by bytes and by file count (budget.batch_files
-    explains why); a file over batch_bytes is a batch by itself."""
+    """Greedy first-fit, in the sequence of the paths, by bytes and by the number of
+    files (the comment at budget.batch_files in config/mirror.toml tells why). A file
+    larger than batch_bytes is a batch by itself."""
     batches: list[list[Any]] = []
     current: list[Any] = []
     current_bytes = 0
@@ -52,8 +53,9 @@ def run(ctx: PhaseContext) -> PhaseResult:
         "SELECT * FROM delta_changed WHERE run_id=? ORDER BY path_lower", (ctx.run_id,)
     ).fetchall()
     free = shutil.disk_usage(ctx.paths.root).free
-    # A file the disk cannot stage is left out of the plan rather than failing the run:
-    # a failed batch stops the chain, and the same file would stop it every run after.
+    # If the disk cannot hold a file in staging, the plan does not include the file, and
+    # the run continues. A batch with an error stops the chain, and the same file can
+    # stop the chain again in each subsequent run.
     file_cap = min(budget.max_file_bytes, free - budget.headroom_bytes)
     oversized = [r for r in rows if int(r["size"]) > file_cap]
     rows = [r for r in rows if int(r["size"]) <= file_cap]
@@ -66,14 +68,15 @@ def run(ctx: PhaseContext) -> PhaseResult:
         raise PhaseError(f"disk cannot hold a batch: {free} free, {needed} needed")
     batches = pack(rows, budget.batch_bytes, budget.batch_files)
     with connection:
-        # A PLANNED batch from any run was never executed; each run re-plans from the
-        # state, so those rows are dead weight in every checkpoint that follows.
+        # No run started a PLANNED batch. Each run makes a new plan from the state.
+        # Thus, these rows only make each subsequent checkpoint larger.
         connection.execute(
             "DELETE FROM batch_items WHERE batch_id IN (SELECT id FROM batches WHERE status='PLANNED')"
         )
         connection.execute("DELETE FROM batches WHERE status='PLANNED'")
-        # A CHECKPOINTED item is already a mirror_objects row and nothing reads it
-        # again; CONFIRM_FAILED rows stay, the operator reads their failure text.
+        # A CHECKPOINTED item is also a row of mirror_objects, and no step reads it
+        # again. The CONFIRM_FAILED rows stay, because the operator reads their failure
+        # text.
         connection.execute("DELETE FROM batch_items WHERE status='CHECKPOINTED'")
         for number, batch in enumerate(batches, start=1):
             cursor = connection.execute(

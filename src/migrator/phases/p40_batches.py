@@ -20,8 +20,8 @@ now = time.time
 def should_start(
     *, elapsed: float, longest: float, budget: float, completed: int
 ) -> bool:
-    """The first batch always runs; afterwards a batch starts only if the longest
-    batch so far would still finish inside the budget."""
+    """The first batch always runs. After it, a batch starts only if the longest batch
+    of this run can complete in the budget."""
     return completed == 0 or elapsed + longest <= budget
 
 
@@ -40,8 +40,9 @@ def run(ctx: PhaseContext) -> PhaseResult:
         ctx.logger,
         after_call=lambda: session.writeback(ctx.runtime, ctx.paths, store),
     )
-    # A Dropbox access token lives four hours and a run up to six, so the provider
-    # gets a fresh one before every batch's fetch, the only step that calls Dropbox.
+    # Dropbox accepts an access token for four hours, but a run can continue for six
+    # hours. Thus, the provider gets a new token before the fetch of each batch. fetch
+    # is the only step that sends requests to Dropbox.
     dropbox = DropboxAPIProvider(ctx.cfg, ctx.state, ctx.logger, token="")
 
     def fetch(batch_id: int) -> dict[str, int]:
@@ -49,9 +50,10 @@ def run(ctx: PhaseContext) -> PhaseResult:
         ctx.logger.add_secret(dropbox.token)
         return batch.fetch(ctx, dropbox, batch_id)
 
-    # Unconditional: the one Proton call a quiet night is guaranteed to make. It forces any
-    # pending token rotation (after_call writes the session back) and keeps the 60-day
-    # idle expiry away, besides gating on the destination UID.
+    # Each run makes this call, also a run with no change. If the token must change,
+    # this call makes the CLI change it, and after_call writes the session back. It also
+    # prevents the expiry of a session after 60 days with no use. And it stops the run
+    # if the destination UID is not correct.
     proton.root_uid(PHASE)
     budget = int(run["budget_minutes"]) * 60
     start_epoch = int(run["start_epoch"])
@@ -94,7 +96,8 @@ def run(ctx: PhaseContext) -> PhaseResult:
                 )
                 details.update(step())
                 details[f"{name}_seconds"] = round(now() - step_began, 1)
-        except Exception:  # provider errors included: the batch row must say FAILED
+        # All errors, also the errors of a provider: the batch row must show FAILED.
+        except Exception:
             with ctx.state.connection:
                 ctx.state.connection.execute(
                     "UPDATE batches SET status='FAILED', completed_at=?, details_json=? WHERE id=?",

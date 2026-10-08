@@ -159,8 +159,8 @@ CREATE TABLE IF NOT EXISTS dropbox_objects (
 );
 CREATE INDEX IF NOT EXISTS idx_dropbox_objects_compare
 ON dropbox_objects(inventory_id, comparison_key);
--- delta and report join mirror_objects to the listing by path; without this every
--- mirrored row scanned the whole listing, and delta grew from minutes to hours.
+-- delta and report join mirror_objects to the listing by path. Without this index,
+-- each mirrored row scans the full listing, and delta takes hours, not minutes.
 CREATE INDEX IF NOT EXISTS idx_dropbox_objects_path
 ON dropbox_objects(inventory_id, path_lower);
 
@@ -317,9 +317,10 @@ class State:
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL")
-        # NORMAL in WAL mode survives a process crash; only an OS failure could lose
-        # the last commits, and the canonical state is the R2 object fetched at the
-        # start of every run, so a runner's disk never outlives what it holds.
+        # In WAL mode, NORMAL keeps the data after a crash of the process. Only a
+        # failure of the operating system can erase the last commits. Each run fetches
+        # the canonical state, the R2 object, at its start. Thus, the state on the disk
+        # of a runner is not necessary after the run.
         self.connection.execute("PRAGMA synchronous=NORMAL")
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.execute("PRAGMA busy_timeout=30000")
@@ -568,8 +569,8 @@ class State:
         *,
         started_at: str | None = None,
     ) -> int:
-        """`started_at` lets a caller that ran the command on another thread record
-        when it really began."""
+        """With `started_at`, a caller that ran the command on a different thread can
+        record the time when the command started."""
         with self.connection:
             cursor = self.connection.execute(
                 """
@@ -711,5 +712,5 @@ class State:
     def snapshot_to(self, target: Path) -> None:
         if target.exists():
             target.unlink()
-        self.connection.commit()  # VACUUM refuses to run inside an open transaction
+        self.connection.commit()  # VACUUM does not run in an open transaction
         self.connection.execute("VACUUM INTO ?", (str(target),))

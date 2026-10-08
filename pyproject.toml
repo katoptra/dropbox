@@ -8,5 +8,5 @@ target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
-# RunLogger uses (phase, operation, message), not stdlib formatting.
+# The arguments of RunLogger are (phase, operation, message), not a stdlib format string.
 ignore = ["PLE1205"]

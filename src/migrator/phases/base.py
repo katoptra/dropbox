@@ -12,7 +12,7 @@ from ..state import State
 
 
 class PhaseError(RuntimeError):
-    """A required gate failed."""
+    """The error of a necessary gate that stops the phase."""
 
 
 @dataclass

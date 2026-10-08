@@ -171,7 +171,8 @@ def test_plan_is_idempotent_within_a_run(state_context, monkeypatch):
 
 
 def test_plan_leaves_out_files_the_disk_or_cap_cannot_hold(state_context, monkeypatch):
-    # cap 12 bytes from config; disk allows 100 - 10 headroom = 90; the config cap wins
+    # the cap from config is 12 bytes; the disk gives 100 - 10 headroom = 90; the config
+    # cap wins
     ctx = _ctx(
         state_context,
         Budget(
@@ -194,7 +195,7 @@ def test_plan_leaves_out_files_the_disk_or_cap_cannot_hold(state_context, monkey
         (ctx.run_id,),
     ).fetchall()
     assert [tuple(r) for r in rows] == [(6, 1), (12, 1)]
-    # a tighter disk lowers the cap below the config value
+    # a smaller disk decreases the cap below the config value
     monkeypatch.setattr(
         p30_plan.shutil, "disk_usage", lambda _: type("U", (), {"free": 21})()
     )

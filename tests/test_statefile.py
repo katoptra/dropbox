@@ -55,8 +55,8 @@ def test_push_writes_history_then_canonical_and_fetch_restores(
 def test_push_compresses_in_slices_that_restore_byte_for_byte(
     state_context, plain_crypt, monkeypatch
 ):
-    """A 4 KB slice turns the smallest state into several xz streams; one lzma read
-    must give back exactly the snapshot."""
+    """A 4 KB slice makes some xz streams from the smallest state. One lzma read must
+    give back the snapshot, with no change."""
     _, paths, state, _, runtime = state_context
     monkeypatch.setattr(statefile, "CHUNK_BYTES", 4096)
     store = FakeStore()

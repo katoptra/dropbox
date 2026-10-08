@@ -11,7 +11,7 @@ from migrator.state import State
 
 
 def _started(paths, epoch=1700000000):
-    """.run/start.txt, as the clock of the toolbox writes it."""
+    """Write .run/start.txt, as the clock of the toolbox writes it."""
     paths.ensure()
     paths.start.write_text(f"{epoch}\n", encoding="utf-8")
 

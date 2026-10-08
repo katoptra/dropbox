@@ -23,8 +23,9 @@ def _ready(runtime_factory, tmp_path):
 
 
 def _as_restored(paths, auth: bytes) -> None:
-    """The two files and .run/session.sha, as the proton engine's `session` writes
-    them. It writes .run/session.sha with `sha256sum <auth file>`."""
+    """Write the two files and .run/session.sha, as the session verb of the proton
+    engine writes them. That verb writes .run/session.sha with `sha256sum <auth file>`.
+    """
     (paths.session / "auth-session.json").write_bytes(auth)
     (paths.session / "clientUid.json").write_bytes(b"c")
     digest = hashlib.sha256(auth).hexdigest()
@@ -39,7 +40,7 @@ def test_a_rotated_session_reaches_the_bucket_after_the_call_that_rotated_it(
     cfg, paths, state, logger, runtime = state_context
     _as_restored(paths, b"v1")
     store = FakeStore()
-    held = []  # what the bucket holds as each CLI call starts
+    held = []  # the bucket content at the start of each CLI call
 
     def run(argv, **kwargs):
         held.append(store.objects.get(session.SESSION_KEY))
@@ -47,7 +48,7 @@ def test_a_rotated_session_reaches_the_bucket_after_the_call_that_rotated_it(
             (paths.session / "auth-session.json").write_bytes(b"v2")
         return subprocess.CompletedProcess(argv, 0, "[]", "")
 
-    # Each phase that uses the CLI makes its provider this way.
+    # Each phase that uses the CLI makes its provider as this test does.
     provider = ProtonCLIProvider(
         cfg,
         state,
@@ -57,8 +58,8 @@ def test_a_rotated_session_reaches_the_bucket_after_the_call_that_rotated_it(
     )
     for _ in range(3):
         provider.list_folder("/my-files/Dropbox", "40_batches")
-    # The session from the engine is not sent again. The changed session is sent
-    # before the next call starts, and only one time.
+    # The phase does not send the session from the engine again. It sends the changed
+    # session before the next call starts, and only one time.
     assert held[:2] == [None, None]
     with tarfile.open(fileobj=io.BytesIO(held[2])) as archive:
         members = {m.name: archive.extractfile(m).read() for m in archive.getmembers()}
@@ -109,7 +110,7 @@ def test_writeback_with_missing_session_file_is_noop(
 def test_session_sha_reads_and_writes_as_sha256sum_does(
     runtime_factory, tmp_path, plain_crypt
 ):
-    # The engine's `session` writes .run/session.sha with sha256sum, and its
+    # The session verb of the engine writes .run/session.sha with sha256sum, and its
     # session-push compares with sha256sum -c.
     runtime, paths = _ready(runtime_factory, tmp_path)
     auth = paths.session / "auth-session.json"
@@ -138,7 +139,7 @@ def test_the_bundle_opens_with_the_engine_tar_command(
     bundle.write_bytes(store.objects[session.SESSION_KEY])  # plain_crypt: no age layer
     out = tmp_path / "out"
     out.mkdir()
-    # The engine's `session` step, with the paths as arguments.
+    # The session step of the engine, with the paths as arguments.
     engine = (
         'tar -xf "$1" -C "$2" auth-session.json clientUid.json && chmod 600 "$2"/*.json'
     )

@@ -49,7 +49,8 @@ def run_phase(command: str, *, apply: bool, runtime: Runtime) -> str:
     cfg = load_config(runtime.config_path)
     paths = WorkPaths.from_runtime(runtime)
     paths.ensure()
-    # The CLI's cache dir must follow MIRROR_WORK_DIR, not the image default.
+    # The cache directory of the CLI must be the session directory in MIRROR_WORK_DIR,
+    # not the default directory of the image.
     os.environ["PROTON_DRIVE_CACHE_DIR"] = str(paths.session)
     state = State(paths.state_db, cfg.mirror.id)
     try:

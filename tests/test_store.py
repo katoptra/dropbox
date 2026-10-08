@@ -16,7 +16,8 @@ AWS_OVERRIDES = {
 
 
 class FakeClient:
-    """Records calls; raises botocore ClientError on demand. No network."""
+    """Records the calls, and raises botocore ClientError when a test asks for it. It
+    uses no network."""
 
     def __init__(self, *, download_errors=None, list_pages=None, probe_code=None):
         self.calls = []

@@ -1,29 +1,43 @@
-# dropbox: nightly Dropbox -> Proton Drive mirror run from GitHub Actions.
+# This Taskfile makes a nightly mirror of a Dropbox account in one Proton Drive folder.
+# An external scheduler starts sync.yml, and GitHub Actions runs it. Each run compares the
+# Dropbox listing with the state in R2. It uploads the changed files in batches until its
+# time budget ends, and the next run continues. The state is an age-encrypted SQLite
+# database, and only R2 has the data about how far the mirror got.
 #
-# Invariant: every step runs inside the toolbox image, on a laptop and in CI
-# alike, and R2 holds the only record of how far the mirror has got. Secrets
-# reach processes by name from 1Password (op.env); nothing is written to disk.
+# The toolbox and the proton engine are parts of katoptra/lib. This file includes the two
+# at v2, with `flatten: true`. The README of lib gives the items that each one supplies.
+# The items in this file are for this mirror only:
+#   - pipeline and plan-pipeline: the steps in sequence, one migrator command for each step,
+#     with the clock, report and ping of the toolbox
+#   - the operator verbs status, offline, fmt and state-rollback
+#   - report-mirror, the report-engine no-op and empty-trash-pipeline
 #
-# The toolbox, which starts a run, contains it in the image, resolves its secrets,
-# renders and checks it, reports it and pings healthchecks.io, is katoptra/lib's,
-# included below at v2 and flattened into this file. What is here is the mirror's
-# own: the pipeline in order, one migrator command a step beside the toolbox's clock,
-# report and ping, the operator verbs around it, and its part of the report.
+# The secrets are the names in op.env. The toolbox gets their values from the vault in
+# 1Password and gives each value to the image by its name. Of these values, only the age
+# identity goes into a file on the disk: mode 0600, for one call. Each step runs in the
+# toolbox image, on a laptop and in CI.
 version: '3'
 
 vars:
-  RECONCILE_HOURS: 168   # the full Proton walk, weekly; lib's toolbox `due` counts from the last complete one
+  # The full Proton walk, weekly. The due verb of the toolbox counts the hours from the
+  # last complete walk.
+  RECONCILE_HOURS: 168
 
-# Run-scoped environment for every migrator command. RUN_BUDGET_MIN is a task var a run
-# sets after the double dash (task sync -- RUN_BUDGET_MIN=30, or the workflow's vars
-# input), mapped to the name the migrator reads; unset, it renders empty, which it reads
-# as unset. RECONCILE, set the same way, is read by the toolbox's `due`, not the
-# migrator. The migrator's work directory and config path are its own defaults, .run and
-# config/mirror.toml, and AWS_REGION is an ENV line in the image, so every in-toolbox
-# command sees it.
+# The environment of each migrator command in a run. RUN_BUDGET_MIN is a task var. A run
+# sets it after the double dash (task sync -- RUN_BUDGET_MIN=30), or in the vars input of
+# the workflow. This line gives it to the migrator by the same name. If the var is unset,
+# its value is empty, and the migrator reads an empty value as unset. A run also sets
+# RECONCILE after the double dash, but the due verb of the toolbox reads it, not the
+# migrator.
+#
+# The work directory and the config path of the migrator are its defaults: .run and
+# config/mirror.toml. AWS_REGION is an ENV line in the image. Thus, each command in the
+# toolbox gets it.
 env:
   RUN_BUDGET_MIN: '{{.RUN_BUDGET_MIN}}'
-  PROTON_DRIVE_LOG_LEVEL: INFO   # the Proton CLI's own log level; its lines reach the public job log
+  # The log level of the Proton CLI. Its log lines go to the job log, which all persons
+  # can read.
+  PROTON_DRIVE_LOG_LEVEL: INFO
 
 includes:
   toolbox:
@@ -51,14 +65,15 @@ includes:
         "                            ${d}with no key it lists the history${r}"
         "  task session-seal -- dir  Encrypt a laptop Proton CLI session into R2"
   # The proton engine supplies session, session-seal, empty-trash, and the pull and push
-  # for lib's `due` and `reconciled`. This file has the tasks in the excludes: list.
+  # that the due and reconciled verbs of the toolbox use. This file has its own version
+  # of each task in the excludes: list.
   proton:
     taskfile: https://raw.githubusercontent.com/katoptra/lib/v2/engines/proton.yml
     flatten: true
     excludes: [pipeline, plan-pipeline, trash, empty-trash-pipeline, report-engine]
 
 tasks:
-  # ---- pipeline (runs inside the toolbox; each step is one migrator command) ----
+  # ---- pipeline (in the toolbox; each step of this file is one migrator command) ----
   pipeline:
     desc: The full budgeted run, inside the toolbox
     cmds:
@@ -88,12 +103,13 @@ tasks:
       - task: inventory
       - task: delta
       - task: plan-phase
-      - python -m migrator report   # no --apply: a read-only plan pushes nothing to R2
+      # No --apply: the plan is read-only, and the report phase pushes nothing to R2.
+      - python -m migrator report
       - cat {{.RUN}}/report.md
 
-  # The stamp of the migrator, after the clock of the toolbox. It reads the start epoch from
-  # .run/start.txt and writes it, with its hour and weekday, to .run/clock.json. It also
-  # clears staging, the report and the walked marker.
+  # The clock step of the migrator runs after the clock of the toolbox. It reads the start
+  # epoch from .run/start.txt and writes it, with its hour and weekday, to .run/clock.json.
+  # It also removes the files in staging, the report and the walked marker.
   clock-phase: { internal: true, cmds: ['python -m migrator clock'] }
   state:      { internal: true, cmds: ['python -m migrator state'] }
   inventory:  { internal: true, cmds: ['python -m migrator inventory'] }
@@ -106,12 +122,14 @@ tasks:
     cmds:
       - python -m migrator --apply reconcile
       - task: record-walk
-  # Only a complete walk is recorded; a partial one leaves the next run due, and it resumes.
+  # This task records a walk in R2 only if the walk is complete. After a walk that is not
+  # complete, the next run is due again, and it continues the walk.
   record-walk:
     internal: true
     status: ['test ! -f {{.RUN}}/walked']
     cmds: [{ task: reconciled }]
-  # Builds .run/report.md from the state, closes the run row, writes the chain marker.
+  # It writes .run/report.md from the state, completes the run row and writes the chain
+  # marker.
   report-phase: { internal: true, cmds: ['python -m migrator --apply report'] }
   # The empty-trash verb of the engine starts this task by name in the image, through
   # task op. go-task does not start an internal task from the command line. Thus, this
@@ -124,14 +142,15 @@ tasks:
       - task: state
       - python -m migrator --apply empty-trash
 
-  # The toolbox's report calls this, then report-mirror. The pipeline of this mirror does
-  # not include the engine's stage or confirm, and this task adds no engine rows.
+  # The report verb of the toolbox runs this task, and then report-mirror. The pipeline of
+  # this mirror does not use the stage and confirm verbs of the engine. Thus, this task
+  # adds no rows of the engine.
   report-engine: {cmds: []}
 
-  # The toolbox's report calls this after its own rows: at the end of the pipeline, and
-  # from the failure path after a run that died anywhere. A run that died before its
-  # report phase gets one now, closing the run row; then the report goes on the job page
-  # under the toolbox's rows.
+  # The report verb of the toolbox runs this task after its own rows. It runs at the end of
+  # the pipeline, and on the failure path after a run that stopped at a step. If a run
+  # stopped before its report phase, this task runs the report phase, which completes the
+  # run row. Then the report goes on the job page, below the rows of the toolbox.
   report-mirror:
     internal: true
     cmds:

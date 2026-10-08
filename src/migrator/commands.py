@@ -68,8 +68,8 @@ def state(runtime: Runtime, args: list[str]) -> int:
             weekday=stamp["weekday"],
             budget_minutes=runtime.budget_override or cfg.budget.run_budget_minutes,
             host=runtime.host,
-            # lib's toolbox `due` decided before this command, by the age of the last
-            # complete walk.
+            # The due verb of the toolbox (lib) made this decision before this command,
+            # from the age of the last complete walk.
             reconcile=paths.reconcile.exists(),
         )
         files, size = db.mirror_totals()
@@ -82,7 +82,8 @@ def state(runtime: Runtime, args: list[str]) -> int:
 def status(runtime: Runtime, args: list[str]) -> int:
     cfg = load_config(runtime.config_path)
     paths = _paths(runtime)
-    _fetch_state(runtime, paths)  # reads R2 directly and starts no run row
+    # This reads the state from R2 directly, and starts no run row.
+    _fetch_state(runtime, paths)
     db = State(paths.state_db, cfg.mirror.id)
     try:
         files, size = db.mirror_totals()

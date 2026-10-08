@@ -115,7 +115,7 @@ def test_reconcile_drops_missing_missized_and_sha1_mismatched(
     )
     _snapshot(
         ctx.state, [("Old/x", "u-old", 1)]
-    )  # last week's walk; pruned by this run
+    )  # the walk of the previous week; this run deletes it
     snapshot_id = _snapshot(
         ctx.state,
         [
@@ -143,9 +143,9 @@ def test_reconcile_drops_missing_missized_and_sha1_mismatched(
     monkeypatch.setattr(p60_reconcile, "Store", lambda runtime, paths: FakeStore())
     monkeypatch.setattr(p60_reconcile.session, "writeback", lambda *a: False)
     result = p60_reconcile.run(ctx)
-    # A stable purpose with reuse_complete=False resumes a killed walk across runs and
-    # still refuses last week's COMPLETE one; the deadline leaves ten minutes for the
-    # rest of the run.
+    # With a stable purpose and reuse_complete=False, the next run continues a walk that
+    # stopped. But it does not use again the COMPLETE walk of the previous week. The
+    # deadline keeps ten minutes for the remaining part of the run.
     assert walked == [("reconcile", False, 1 + 1 * 60 - 600)]
     assert result.outputs["dropped"] == 3
     assert result.outputs["sha1_mismatch"] == 1
@@ -333,9 +333,10 @@ def test_reconcile_trashes_empty_folders_dropbox_no_longer_has(
     monkeypatch.setattr(p60_reconcile, "Store", lambda runtime, paths: FakeStore())
     monkeypatch.setattr(p60_reconcile.session, "writeback", lambda *a: False)
     result = p60_reconcile.run(ctx)
-    # Gone and Gone/Sub are folders Dropbox no longer has, holding nothing the mirror
-    # knows: the topmost one goes and takes Sub with it. Held is gone from Dropbox too
-    # but still holds a file on record, so it stays until that file is trashed.
+    # Gone and Gone/Sub are folders that are not in Dropbox, and they hold nothing that
+    # the mirror knows. The topmost folder goes to the trash, and Sub goes with it. Held
+    # is also not in Dropbox, but it holds a file of the state. Thus, it stays until
+    # that file goes to the trash.
     assert trashed == [["/my-files/Dropbox/Gone"]]
     assert result.outputs["folders_trashed"] == 1
     assert _figures_event(ctx.state)["folders_trashed"] == 1
