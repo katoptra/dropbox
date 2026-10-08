@@ -12,6 +12,7 @@ from conftest import FakeStore
 from migrator import session
 from migrator.paths import WorkPaths
 from migrator.providers.proton_cli import ProtonCLIProvider
+from migrator.store import StoreError
 
 
 def _ready(runtime_factory, tmp_path):
@@ -77,6 +78,24 @@ def test_writeback_sends_when_no_digest_is_recorded(
     assert session.SESSION_KEY in store.objects
 
 
+class _FailingStore(FakeStore):
+    def put(self, source, key):
+        raise StoreError("R2 upload failed")
+
+
+def test_a_failed_send_keeps_the_old_record_so_the_next_call_sends(
+    runtime_factory, tmp_path, plain_crypt
+):
+    runtime, paths = _ready(runtime_factory, tmp_path)
+    _as_restored(paths, b"v1")
+    (paths.session / "auth-session.json").write_bytes(b"v2")
+    with pytest.raises(StoreError):
+        session.writeback(runtime, paths, _FailingStore())
+    store = FakeStore()
+    assert session.writeback(runtime, paths, store) is True
+    assert session.SESSION_KEY in store.objects
+
+
 def test_writeback_with_missing_session_file_is_noop(
     runtime_factory, tmp_path, plain_crypt
 ):
@@ -103,3 +122,29 @@ def test_session_sha_reads_and_writes_as_sha256sum_does(
     assert session.writeback(runtime, paths, FakeStore()) is True
     check = ["sha256sum", "--status", "-c", str(paths.session_sha)]
     assert subprocess.run(check, check=False).returncode == 0
+
+
+@pytest.mark.skipif(shutil.which("tar") is None, reason="the toolbox image has it")
+def test_the_bundle_opens_with_the_engine_tar_command(
+    runtime_factory, tmp_path, plain_crypt
+):
+    runtime, paths = _ready(runtime_factory, tmp_path)
+    _as_restored(paths, b"v1")
+    (paths.session / "auth-session.json").write_bytes(b"v2")
+    (paths.session / "proton-drive.log").write_bytes(b"noise")
+    store = FakeStore()
+    assert session.writeback(runtime, paths, store) is True
+    bundle = tmp_path / "session.tar"
+    bundle.write_bytes(store.objects[session.SESSION_KEY])  # plain_crypt: no age layer
+    out = tmp_path / "out"
+    out.mkdir()
+    # The engine's `session` step, with the paths as arguments.
+    engine = (
+        'tar -xf "$1" -C "$2" auth-session.json clientUid.json && chmod 600 "$2"/*.json'
+    )
+    subprocess.run(["sh", "-c", engine, "sh", str(bundle), str(out)], check=True)
+    assert {f.name: f.read_bytes() for f in out.iterdir()} == {
+        "auth-session.json": b"v2",
+        "clientUid.json": b"c",
+    }
+    assert (out / "auth-session.json").stat().st_mode & 0o777 == 0o600
