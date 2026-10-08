@@ -32,7 +32,7 @@ includes:
   toolbox:
     taskfile: https://raw.githubusercontent.com/katoptra/lib/v2/toolbox.yml
     flatten: true
-    excludes: [report-mirror]
+    excludes: [report-mirror, report-engine]
     vars:
       NAME: dropbox
       DESC: nightly Dropbox -> Proton Drive mirror; R2 holds the state
@@ -133,6 +133,10 @@ tasks:
       - task: session
       - task: state
       - python -m migrator --apply empty-trash
+
+  # The toolbox's report calls this, then report-mirror. This mirror has no engine, so
+  # it adds no engine rows.
+  report-engine: {cmds: []}
 
   # The toolbox's report calls this after its own rows: at the end of the pipeline, and
   # from the failure path after a run that died anywhere. A run that died before its
