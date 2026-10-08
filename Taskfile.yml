@@ -29,7 +29,7 @@ includes:
   toolbox:
     taskfile: https://raw.githubusercontent.com/katoptra/lib/v2/toolbox.yml
     flatten: true
-    excludes: [report-mirror, report-engine]
+    excludes: [report-mirror]
     vars:
       NAME: dropbox
       DESC: nightly Dropbox -> Proton Drive mirror; R2 holds the state
@@ -40,8 +40,7 @@ includes:
         "  task status               Counts and the last run's figures from the state in R2"
         ""
         "${c}checks -- offline, no credentials${r}"
-        "  task test                 pytest inside the toolbox"
-        "  task lint                 ruff check + format check"
+        "  task run -- task offline  pytest, ruff check and ruff format --check"
         "  task fmt                  ruff format"
         ""
         "${c}write -- changes Proton Drive and the state in R2${r}"
@@ -145,15 +144,12 @@ tasks:
         vars: { ARGS: python -m migrator status }
 
   # ---- checks ----
-  test:
-    desc: Run the test suite inside the toolbox
+  offline:
+    desc: 'pytest, ruff check and ruff format --check, inside the toolbox: task run -- task offline'
     cmds:
-      - task run -- python -m pytest {{.CLI_ARGS}}
-
-  lint:
-    desc: ruff check and format check
-    cmds:
-      - task run -- sh -c 'ruff check src tests && ruff format --check src tests'
+      - python -m pytest
+      - ruff check src tests
+      - ruff format --check src tests
 
   fmt:
     desc: ruff format
