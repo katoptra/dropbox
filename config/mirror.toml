@@ -1,37 +1,43 @@
-# The one behavior input. Runtime paths, secrets and the account identifiers
-# (MIRROR_DROPBOX_ACCOUNT_ID, MIRROR_PROTON_DESTINATION, MIRROR_PROTON_DESTINATION_UID)
-# come from the environment; see op.env.
+# This file is the only configuration input of the mirror. The runtime paths, the secrets
+# and the account identifiers (MIRROR_DROPBOX_ACCOUNT_ID, MIRROR_PROTON_DESTINATION,
+# MIRROR_PROTON_DESTINATION_UID) are in the environment. Refer to op.env.
 [mirror]
-# The primary key of the state in R2; every run row references it. The repository
-# is katoptra/dropbox, but this value is the state's and never changes.
+# This value is the primary key of the state in R2, and each run row refers to it. The
+# repository is katoptra/dropbox, but this value is a part of the state, and it does not
+# change.
 id = "dropbox-mirror"
 
 [dropbox]
 root = ""
 page_limit = 2000
 minimum_call_interval_seconds = 0.1
-# Small-file fetch is bound by Dropbox's first-byte latency per connection, not by
-# the shared 0.1 s call spacing, which caps the pool at ten files a second.
+# For small files, the time to the first byte of each Dropbox connection controls the
+# speed of fetch. The interval of 0.1 s between the calls of all the workers does not
+# control it. But with that interval, the pool gets a maximum of ten files each second.
 download_workers = 8
 
 [budget]
 batch_gb = 4
-# Measured: 1,000 files uploaded in about 650 s, about 0.65 s per file. 2,000 files
-# costs roughly 22 minutes of run_budget_minutes.
+# Measured: the CLI uploaded 1,000 files in about 650 s, about 0.65 s for each file. A
+# batch of 2,000 files uses about 22 minutes of run_budget_minutes.
 batch_files = 2000
-# A file over this is left out of every plan: a GitHub runner guarantees 14 GB of
-# disk, the staging of one file needs the file plus disk_headroom_gb, and the state
-# and image share the same disk. The report counts what was left out.
+# No plan includes a file with a size of more than this value. A GitHub runner has a
+# minimum of 14 GB of disk. In staging, one file uses its size plus disk_headroom_gb,
+# and the state and the image use the same disk. The report counts the files that the
+# plan did not include.
 max_file_gb = 12
-# Just under GitHub's six-hour job limit: each run pays one image pull, one Dropbox
-# listing and one unused tail of up to a batch, so fewer, longer runs waste less.
-# sync.yml's timeout-minutes must stay 20 minutes above this.
+# This value is less than the job limit of GitHub, six hours, but it is near that limit.
+# Each run pulls the image one time and lists Dropbox one time. At the end of each run,
+# the run does not use a part of its budget, at most the time of one batch. Thus, with a
+# smaller number of longer runs, less time goes to these items. The timeout-minutes of
+# sync.yml must stay 20 minutes more than this value.
 run_budget_minutes = 335
 ceiling_gb = 4000
 disk_headroom_gb = 1
 listing_floor_ratio = 0.5
 
 [proton]
-# The reconcile walk is one `filesystem list` process per folder; this many run at once,
-# each from its own copy of the CLI session. Eight matches dropbox.download_workers.
+# The reconcile walk is one `filesystem list` process for each folder. This value is the
+# number of processes that run at the same time, each from a private copy of the CLI
+# session. Eight is the same as dropbox.download_workers.
 walk_workers = 8
