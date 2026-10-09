@@ -279,8 +279,8 @@ task empty-trash                   # delete the trash of Proton permanently, aft
 gh workflow run sync.yml           # one run in Actions
 ```
 
-Do not run `task sync`, `task plan` or `task empty-trash` on a laptop while an Actions run
-can be in progress. If the laptop and the run use the session at the same time, a new login
+Do not run `task sync` or `task empty-trash` on a laptop while an Actions run can be in
+progress. If the laptop and the run use the session at the same time, a new login
 can be necessary ([lib, The session](https://github.com/katoptra/lib#the-session)).
 
 On a laptop, `task sync` does one run, and it does not start the next run. The next run
