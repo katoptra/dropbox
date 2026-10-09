@@ -73,8 +73,8 @@ def run(ctx: PhaseContext) -> PhaseResult:
     units = _units(ctx, rows)
     # If files in Dropbox move to new folders, tens of thousands of files can go to the
     # trash. That is much more than one run can do. Thus, the phase does one unit at a
-    # time, in the budget of the run. It deletes the mirror rows of each unit when the
-    # unit is complete, and the next run does the remaining units.
+    # time, in the budget of the run. It deletes the mirror rows of a unit one trash
+    # call at a time, and the next run does the remaining units.
     budget = int(run["budget_minutes"]) * 60
     start_epoch = int(run["start_epoch"])
     label = history_label(ctx)
@@ -179,9 +179,9 @@ def _units(ctx: PhaseContext, rows: list) -> list[tuple[tuple[str, str | None], 
 def _trash_unit(
     ctx: PhaseContext, proton, parent: str, name: str | None, group: list
 ) -> Counter[str]:
-    """One unit: list its parent, move to the trash the nodes that are there, one call
-    at a time, and record each row. Then delete the mirror rows of the files that went
-    to the trash or that were not there."""
+    """One unit: list its parent. Record the files that are not there, and delete their
+    mirror rows. Then move the nodes that are there to the trash, one call at a time.
+    After each call, record its rows and delete their mirror rows."""
     counts: Counter[str] = Counter()
     try:
         by_name = resolve_children(proton, parent, PHASE)

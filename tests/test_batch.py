@@ -62,7 +62,7 @@ def test_fetch_stages_under_path_display_and_marks_vanished(state_context):
     dropbox = FakeDropbox(files, missing=["/Docs/gone.txt"])
     counts = batch.fetch(ctx, dropbox, batch_id)
     assert counts == {"fetched": 1, "vanished": 1}
-    # the test asks the API by path_lower, and the file goes to a path with the
+    # fetch gets each file with its path_lower, and the file goes to a path with the
     # uppercase and lowercase letters of Dropbox
     assert sorted(dropbox.downloaded) == ["/docs/gone.txt", "/docs/réport.txt"]
     assert (ctx.paths.staging / "Docs" / "Réport.txt").read_bytes() == b"report"
