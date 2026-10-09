@@ -30,8 +30,8 @@ TEST_ENV = {
 @pytest.fixture(autouse=True)
 def aws_environment(monkeypatch):
     """Put the AWS_* values of TEST_ENV in the environment, where op run puts them.
-    boto3 reads them from there. If they are not there, boto3 sends a request to the EC2
-    metadata service."""
+    boto3 reads them from there. If they are not there, boto3 tries to get them from the
+    EC2 metadata service."""
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL_S3"):
         monkeypatch.setenv(name, TEST_ENV[name])
 
@@ -124,7 +124,7 @@ class FakeStore:
 
 
 class FakeDropbox:
-    """A replacement for DropboxAPIProvider.download: fixed bytes by path_lower."""
+    """A replacement for DropboxAPIProvider.download: the bytes for each path_lower."""
 
     def __init__(self, files: dict[str, bytes], missing=()):
         self.files = {k.lower(): v for k, v in files.items()}
@@ -192,10 +192,10 @@ def seed_api_inventory(state, purpose, rows):
 
 
 class FakeProton:
-    """A replacement for ProtonCLIProvider: fixed listings, and an `upload_tree` that
-    reports on the files that it got. `skip` and `fail` are file names that the CLI
-    reports as the same content or as refused. Set them on the instance before the test
-    uses `upload_tree`."""
+    """A replacement for ProtonCLIProvider: listings that a test gives, and an
+    `upload_tree` that reports on the files that it got. `skip` and `fail` are file
+    names that the CLI reports as the same content or as refused. Set them on the
+    instance before the test uses `upload_tree`."""
 
     def __init__(self, listings: dict[str, list[dict]], fail_list=()):
         self.listings = listings

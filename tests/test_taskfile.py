@@ -26,7 +26,7 @@ def test_every_operator_task_is_in_the_menu():
         "pipeline",
         "plan-pipeline",
     }
-    # If a regression in the parser returns an empty set, the subset check below is
-    # correct with no data, and it hides each missing task.
+    # A regression in the parser can return an empty set. Then the subset check that
+    # follows is correct with no data, and it hides each missing task.
     assert expected
     assert expected <= listed, sorted(expected - listed)

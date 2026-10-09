@@ -16,7 +16,7 @@ SNAPSHOT_PURPOSE = "reconcile"
 def _prune_other_snapshots(connection: sqlite3.Connection, snapshot_id: int) -> None:
     # One walk gives sufficient data. The previous walk only makes each checkpoint
     # larger. This function keeps the walk that this run completed or continued, also if
-    # the walk is not complete.
+    # the walk did not complete.
     with connection:
         stale = [
             (int(r["id"]),)
@@ -52,7 +52,7 @@ def _correct_mirror(
     known: set[str] = set()
     with connection:
         for row in connection.execute("SELECT * FROM mirror_objects").fetchall():
-            # This line gets the key before the deletion below. A row that this
+            # This line gets the key before the deletion that follows. A row that this
             # reconcile will correct is state that the mirror knows, not an unknown
             # stray.
             key = comparison_key(str(row["path_display"]))
@@ -153,11 +153,11 @@ def run(ctx: PhaseContext) -> PhaseResult:
     proton.root_uid(PHASE)
     deadline = int(run["start_epoch"]) + int(run["budget_minutes"]) * 60 - 600
     # ponytail: the walk is one CLI process for each folder, on proton.walk_workers
-    # workers, and it addresses each folder by UID. Its cost is the number of folders
-    # divided by the number of workers. With a stable purpose and reuse_complete=False,
-    # the walk continues the RUNNING snapshot that the deadline or a stopped run left.
-    # It does not start again at the root. It also does not use again a COMPLETE walk
-    # from a previous reconcile.
+    # workers, and it addresses each folder with its UID. Its cost is the number of
+    # folders divided by the number of workers. With a stable `purpose` and
+    # reuse_complete=False, the walk continues the RUNNING snapshot that the deadline or
+    # a stopped run did not complete. It does not start again at the root. It also does
+    # not use again a COMPLETE walk from a previous reconcile.
     snapshot_id = proton.inventory(
         SNAPSHOT_PURPOSE, PHASE, reuse_complete=False, deadline=deadline
     )
@@ -190,12 +190,12 @@ def run(ctx: PhaseContext) -> PhaseResult:
         )
         return PhaseResult(outputs={"partial": folders_pending})
     # ponytail: this compares the snapshot with the mirror_objects of this run, also if
-    # the walk started some weeks before. If a file changed or went to the trash after
-    # the walk listed its folder, the result is a drop (a re-upload that the CLI skips
-    # as the same content, at a low cost) or a trash call on a node that is in the
-    # trash. The ceiling: a walk that continues for more than one reconcile interval.
-    # The upgrade path: start a new snapshot if the walk started more than one interval
-    # before.
+    # the walk started some weeks before this run. A file can change, or go to the
+    # trash, after the walk lists its folder. The result is then a drop or a trash call
+    # on a node that is in the trash. After a drop, the mirror uploads the file again,
+    # and the CLI skips the same content at a low cost. The ceiling: a walk that
+    # continues for more than one reconcile interval. The upgrade path: start a new
+    # snapshot if the walk started more than one interval before this run.
 
     # proton_nodes.relative_path (and its comparison_key) does not start with a slash,
     # but a Dropbox display path does. comparison_key removes this slash from the two

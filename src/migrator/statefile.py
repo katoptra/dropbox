@@ -77,8 +77,8 @@ def _compress(source_path: Path, target_path: Path) -> None:
     seconds, but with preset 6, it compresses in minutes. The objects of preset 1 are
     about one third larger. Each checkpoint compresses the state one time.
 
-    At most about one slice for each core is in progress. Thus, the memory holds some
-    slices, not the full state."""
+    The function compresses at most about one slice for each core at the same time.
+    Thus, the memory holds some slices, not the full state."""
     window = os.cpu_count() or 1
     pending: deque = deque()
     with (

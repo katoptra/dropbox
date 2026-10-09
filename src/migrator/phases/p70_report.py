@@ -34,12 +34,12 @@ def _batch_details(ctx: PhaseContext) -> list[dict[str, Any]]:
 
 
 def _reconcile_figures(ctx: PhaseContext) -> dict[str, Any]:
-    """The figures event of the last weekly walk, as migrator.phases.p60_reconcile
+    """Reads the figures event of the last weekly walk, as migrator.phases.p60_reconcile
     writes it. If a walk stops at the end of the budget, it writes `complete=0` to the
     log, and its matched/dropped/strays values are zero. These zero values are not data.
     Thus, this function reads matched/dropped/strays/mismatches only from the last
-    COMPLETE walk. `reconcile_walk` tells if the most recent walk is complete. If there
-    is no event, no walk ran."""
+    COMPLETE walk. `reconcile_walk` tells if the most recent walk completed. If there is
+    no event, no walk ran."""
     connection = ctx.state.connection
     latest = connection.execute(
         "SELECT fields_json FROM events WHERE phase='60_reconcile' AND operation='figures' "
@@ -73,8 +73,9 @@ def _throttling(
     command_provider: str | None,
     since: str,
 ) -> dict[str, float]:
-    """Only this run. `since` is runs.started_at. The events and commands tables have no
-    run id. Thus, this function compares `commands.started_at` with `since`."""
+    """The figures are for this run only. `since` is runs.started_at. The events and
+    commands tables have no run id. Thus, this function compares `commands.started_at`
+    with `since`."""
     connection = ctx.state.connection
     waits = [
         float(json.loads(row["fields_json"] or "{}").get("wait_seconds") or 0)

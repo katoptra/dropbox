@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{args.command}: {status}")
             return 0 if status in {"PASS", "PLANNED"} else 2
         return int(COMMANDS[args.command](runtime, args.args))  # type: ignore[operator]
-    except Exception as exc:  # noqa: BLE001 - all classes: a traceback can show provider stderr
+    except Exception as exc:  # noqa: BLE001 - all classes: a traceback can show stderr
         # The text of an error can contain the stderr of a provider, with path names.
         # Thus, if MIRROR_VERBOSE is not 1, the CI log shows only the class of the
         # error.

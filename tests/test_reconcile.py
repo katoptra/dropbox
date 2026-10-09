@@ -113,9 +113,8 @@ def test_reconcile_drops_missing_missized_and_sha1_mismatched(
             ("/Keep/hash.txt", 4, "u-hash", "sha-mirror"),
         ],
     )
-    _snapshot(
-        ctx.state, [("Old/x", "u-old", 1)]
-    )  # the walk of the previous week; this run deletes it
+    # This is the walk of the previous week, and this run deletes it.
+    _snapshot(ctx.state, [("Old/x", "u-old", 1)])
     snapshot_id = _snapshot(
         ctx.state,
         [
@@ -143,9 +142,9 @@ def test_reconcile_drops_missing_missized_and_sha1_mismatched(
     monkeypatch.setattr(p60_reconcile, "Store", lambda runtime, paths: FakeStore())
     monkeypatch.setattr(p60_reconcile.session, "writeback", lambda *a: False)
     result = p60_reconcile.run(ctx)
-    # With a stable purpose and reuse_complete=False, the next run continues a walk that
-    # stopped. But it does not use again the COMPLETE walk of the previous week. The
-    # deadline keeps ten minutes for the remaining part of the run.
+    # With a stable `purpose` and reuse_complete=False, the next run continues a walk
+    # that stopped. But it does not use again the COMPLETE walk of the previous week.
+    # The deadline keeps ten minutes for the remaining part of the run.
     assert walked == [("reconcile", False, 1 + 1 * 60 - 600)]
     assert result.outputs["dropped"] == 3
     assert result.outputs["sha1_mismatch"] == 1

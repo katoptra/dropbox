@@ -69,7 +69,7 @@ def state(runtime: Runtime, args: list[str]) -> int:
             budget_minutes=runtime.budget_override or cfg.budget.run_budget_minutes,
             host=runtime.host,
             # The due verb of the toolbox (lib) made this decision before this command,
-            # from the age of the last complete walk.
+            # from the age of the last completed walk.
             reconcile=paths.reconcile.exists(),
         )
         files, size = db.mirror_totals()

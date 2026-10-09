@@ -9,9 +9,10 @@ PHASE = "30_plan"
 
 
 def pack(rows: list[Any], batch_bytes: int, batch_files: int) -> list[list[Any]]:
-    """Greedy first-fit, in the sequence of the paths, by bytes and by the number of
-    files (the comment at budget.batch_files in config/mirror.toml tells why). A file
-    larger than batch_bytes is a batch by itself."""
+    """Put the rows in batches with a greedy first-fit, in the sequence of the paths. A
+    batch has a limit on its bytes and a limit on its number of files (the comment at
+    budget.batch_files in config/mirror.toml tells why). A file larger than batch_bytes
+    is the only file in its batch."""
     batches: list[list[Any]] = []
     current: list[Any] = []
     current_bytes = 0

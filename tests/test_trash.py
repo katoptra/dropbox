@@ -24,8 +24,8 @@ def _ctx(state_context, apply=True, remaining=0):
 
 
 def _deleted(ctx, displays, uid=None, live=()):
-    """Add the deleted rows, and the `live` mirror rows that stop a trash call on the
-    full folder of each row."""
+    """Add the deleted rows. Also add the `live` mirror rows, which stop a trash call on
+    their full folders."""
     with ctx.state.connection:
         for display in live:
             ctx.state.connection.execute(
@@ -244,7 +244,7 @@ def test_trash_takes_a_folder_whole_when_nothing_live_remains_under_it(
 ):
     """A reorganization of Dropbox moves full trees. The topmost folder with no
     remaining file of the mirror goes to the trash in one call. In a folder that has a
-    remaining file, the phase moves each deleted file to the trash by name."""
+    remaining file, the phase moves each deleted file to the trash with its name."""
     ctx = _ctx(state_context)
     _deleted(
         ctx,
@@ -290,7 +290,7 @@ def test_trash_calls_in_chunks_and_settles_each_chunk(
     state_context, monkeypatch, plain_crypt
 ):
     """For a folder of many files, the phase makes some calls. If a call stops with an
-    error, the rows of the previous chunks stay complete, and the remaining rows stay
+    error, the rows of the previous chunks stay recorded, and the remaining rows stay
     for the next run."""
     ctx = _ctx(state_context)
     names = [f"/Docs/{i}.txt" for i in range(5)]

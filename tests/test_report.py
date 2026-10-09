@@ -253,9 +253,9 @@ def test_reconcile_walk_partial_never_reads_as_a_clean_bill_of_health(state_cont
     )
     verification = p70_report.figures(ctx)["verification"]
     assert verification["reconcile_walk"] == "partial, 7 folders pending"
-    # A walk that is not complete writes no matched/dropped/strays/mismatch values of
-    # its own to the log. These values must not look like a clean (zero) result until a
-    # walk is complete.
+    # A walk that did not complete writes only zero matched/dropped/strays/mismatch
+    # values to the log. These values must not show a clean (zero) result until a walk
+    # completes.
     assert verification["reconcile_matched"] == "n/a"
     assert verification["reconcile_dropped"] == "n/a"
     assert verification["reconcile_strays_trashed"] == "n/a"
@@ -286,7 +286,7 @@ def test_reconcile_walk_reports_the_latest_complete_walk_after_a_partial_one(
         folders_pending=3,
     )
     verification = p70_report.figures(ctx)["verification"]
-    # The most recent walk is not complete, but the counts of the last complete walk
+    # The most recent walk did not complete, but the values of the last completed walk
     # stay.
     assert verification["reconcile_walk"] == "partial, 3 folders pending"
     assert verification["reconcile_matched"] == 5

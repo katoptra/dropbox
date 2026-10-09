@@ -109,7 +109,7 @@ class WorkerSessions:
     again.
 
     Each copy also has the crypto and entity caches of the CLI on disk. Thus, a worker
-    starts with all the data that the run decrypted before."""
+    starts with all the data that the run decrypted before the walk."""
 
     def __init__(self, session_dir: Path | None, count: int) -> None:
         self.session_dir = session_dir
@@ -140,7 +140,8 @@ class WorkerSessions:
         return {**os.environ, "PROTON_DRIVE_CACHE_DIR": str(self.dirs[worker])}
 
     def promote(self) -> bool:
-        """Put the newest session copy that exists in the session directory."""
+        """Put the session file of the newest copy that has one in the session
+        directory."""
         if self.session_dir is None:
             return False
         candidates = [
@@ -149,10 +150,10 @@ class WorkerSessions:
         if not candidates:
             return False
         # ponytail: the newest file wins. If two workers do a refresh at the same time,
-        # each can hold a token that the server accepts, and this method ignores the
-        # token of the earlier copy without a message. The CLI does not tell which token
-        # the server accepts. Thus, there is no better value to compare. The upgrade
-        # path: when the CLI gives this data, compare the tokens.
+        # each copy can hold a token that the server accepts. This method then ignores
+        # the token of the other copy, and writes no message. The CLI does not tell
+        # which token the server accepts. Thus, there is no better value to compare. The
+        # upgrade path: when the CLI gives this data, compare the tokens.
         newest = max(candidates, key=lambda f: f.stat().st_mtime_ns)
         main = self.session_dir / SESSION_FILE
         content = newest.read_bytes()
@@ -293,7 +294,7 @@ class ProtonCLIProvider:
             )
         elif record.category == "AUTH":
             # A session that the server rejects is not a temporary failure. A retry only
-            # adds time before the stop, and the operator must correct the session.
+            # adds time before the run stops, and the operator must correct the session.
             self.logger.error(
                 phase,
                 operation,
@@ -421,7 +422,7 @@ class ProtonCLIProvider:
         """Walks the destination, one folder at a time, into a proton_snapshots row. The
         queue of folders is in proton_folders. Thus, if the deadline or a stopped run
         ends a walk, the next walk continues from the folder where it stopped. Returns
-        the snapshot id. The status of the snapshot tells if the walk is complete."""
+        the snapshot id. The status of the snapshot tells if the walk completed."""
         snapshot_id = self._open_snapshot(purpose, reuse_complete)
         if snapshot_id is None:
             return self._latest_complete(purpose)
@@ -511,8 +512,9 @@ class ProtonCLIProvider:
     def _commit_listing(
         self, snapshot_id: int, folder: Any, children: list[dict[str, Any]]
     ) -> list[str]:
-        """Records the children of a folder and marks the folder COMPLETE. Returns the
-        UIDs of the subfolders that this listing added to the queue."""
+        """Records the children of a folder and sets the status of the folder to
+        COMPLETE. Returns the UIDs of the subfolders that this listing added to the
+        queue."""
         connection = self.state.connection
         cli_path = str(folder["cli_path"])
         parent_uid = str(folder["uid"])
@@ -570,9 +572,8 @@ class ProtonCLIProvider:
                         claimed_mtime,
                         sha1,
                         int(bool(sha1_verified)) if sha1_verified is not None else None,
-                        # Each field that reconcile reads has its own column. The raw
-                        # JSON of the node can be half of the state, and no step reads
-                        # it.
+                        # Each field that reconcile reads has a column. The raw JSON of
+                        # the node can be half of the state, and no step reads it.
                         "{}",
                     ),
                 )
@@ -655,10 +656,10 @@ class ProtonCLIProvider:
         *,
         accepted: frozenset[int] = frozenset({0}),
     ) -> str:
-        """Runs a CLI call that changes Proton, and tries it again after an error. After
-        a timeout, or after a failure that is not an authentication failure, it tries
-        the call again after a backoff, up to `mutation_max_attempts` times. It raises
-        the failure of the last attempt."""
+        """Runs a CLI call that changes Proton. After a timeout, or after a failure that
+        is not an authentication failure, it runs the call again after a backoff. It
+        runs the call a maximum of `mutation_max_attempts` times, and raises the failure
+        of the last attempt."""
         attempts = self.cfg.proton.mutation_max_attempts
         delay = self.cfg.proton.initial_backoff_seconds
         for attempt in range(1, attempts + 1):
@@ -742,7 +743,7 @@ class ProtonCLIProvider:
             )
         if result.returncode != 0:
             # An accepted exit code that is not zero tells that the CLI did some items
-            # and refused others. confirm reads the counts of the upload summary as one
+            # and refused others. confirm reads the numbers in the upload summary as one
             # result for the full batch. Only this log line tells the cause of that exit
             # code.
             self.logger.warning(
@@ -757,14 +758,16 @@ class ProtonCLIProvider:
 
 class _Walk:
     """The folder walk of `ProtonCLIProvider.inventory`: N workers. Each worker lists
-    one folder in each CLI process, from its own session copy.
+    one folder in each CLI process, from a private session copy.
 
     A child folder goes into the queue of the worker that listed its parent. Thus, that
     worker has the decrypted keys of the parent in its cache. A worker with an empty
-    queue takes folders from the longest queue. ponytail: at the start, the walk makes
-    the queues again from the PENDING rows, by the name of the top-level folder. Thus, a
-    walk that continues starts without these keys in the caches. The child rule above
-    fills the caches again during the walk."""
+    queue gets folders from the longest queue.
+
+    ponytail: at the start, the walk makes the queues again from the PENDING rows. The
+    name of the top-level folder of a row selects its queue. Thus, a walk that continues
+    starts without these keys in the caches. The rule for child folders fills the caches
+    again during the walk."""
 
     RESCUES = 3
 
@@ -811,7 +814,8 @@ class _Walk:
             done, _ = wait(self.in_flight, return_when=FIRST_COMPLETED)
             outcome = self._collect(done)
             if outcome != "ok" or self._past_deadline():
-                # Collect all the listings in progress before the decisions below.
+                # Before the decisions that follow, collect the listings that the
+                # workers did not complete.
                 drained = self._collect(set(self.in_flight))
                 outcome = outcome if outcome != "ok" else drained
             if outcome == "failed":
@@ -911,7 +915,7 @@ class _Walk:
         return outcome
 
     def _rescue(self, sessions: WorkerSessions) -> None:
-        """The refresh of a worker did not win the race: put the copy that won in the
+        """The refresh of a worker did not win the race. Put the copy that won in the
         session directory, and write it to the other copies."""
         self.rescues += 1
         if self.rescues > self.RESCUES:

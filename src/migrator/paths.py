@@ -62,7 +62,7 @@ class WorkPaths:
 
     @property
     def walked(self) -> Path:
-        # A complete walk writes it. Then the Taskfile records the reconcile in R2.
+        # A completed walk writes it. Then the Taskfile records the reconcile in R2.
         return self.root / "walked"
 
     @property

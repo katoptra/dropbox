@@ -42,7 +42,7 @@ def run(ctx: PhaseContext) -> PhaseResult:
     )
     # Dropbox accepts an access token for four hours, but a run can continue for six
     # hours. Thus, the provider gets a new token before the fetch of each batch. fetch
-    # is the only step that sends requests to Dropbox.
+    # is the only step of this phase that uses the Dropbox API.
     dropbox = DropboxAPIProvider(ctx.cfg, ctx.state, ctx.logger, token="")
 
     def fetch(batch_id: int) -> dict[str, int]:
@@ -51,9 +51,9 @@ def run(ctx: PhaseContext) -> PhaseResult:
         return batch.fetch(ctx, dropbox, batch_id)
 
     # Each run makes this call, also a run with no change. If the token must change,
-    # this call makes the CLI change it, and after_call writes the session back. It also
-    # prevents the expiry of a session after 60 days with no use. And it stops the run
-    # if the destination UID is not correct.
+    # this call makes the CLI change it, and after_call writes the session back. Proton
+    # stops a session that no call uses for 60 days. This call prevents that. It also
+    # stops the run if the destination UID is not correct.
     proton.root_uid(PHASE)
     budget = int(run["budget_minutes"]) * 60
     start_epoch = int(run["start_epoch"])

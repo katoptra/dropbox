@@ -263,8 +263,8 @@ def test_walk_lists_every_folder_below_the_root_by_uid(state_context):
     provider = ProtonCLIProvider(cfg, state, logger, run=runner, sleep=lambda _: None)
     snapshot = provider.inventory("reconcile", "60_reconcile", reuse_complete=False)
     listed = [c for c in calls if c != "version"]
-    # The walk addresses only the root by name, and each descendant by UID. Thus, the
-    # CLI finds a descendant in one lookup and does not list each ancestor.
+    # The walk addresses only the root with its name, and each descendant with its UID.
+    # Thus, the CLI finds a descendant in one lookup and does not list each ancestor.
     assert sorted(listed) == sorted([root, "/my-files/uid-a", "/my-files/uid-b"])
     stored = {
         r["uid"]: r["cli_path"]
@@ -332,7 +332,7 @@ def test_walk_adopts_the_session_a_worker_refreshed_and_retries_the_loser(
             return subprocess.CompletedProcess(argv, 0, _listing(payload), "")
         session = Path(env["PROTON_DRIVE_CACHE_DIR"]) / "auth-session.json"
         if argv[-1] == "/my-files/uid-a":
-            # The winner: the CLI refreshed its token and wrote its own copy again.
+            # The winner: the CLI refreshed its token and wrote its copy again.
             session.write_bytes(b"refreshed")
             return subprocess.CompletedProcess(argv, 0, _listing([]), "")
         if session.read_bytes() == b"old":
@@ -428,7 +428,7 @@ def test_a_walk_that_raises_waits_for_the_listings_in_flight(
             return subprocess.CompletedProcess(argv, 0, _listing(payload), "")
         if argv[-1] == "/my-files/uid-a":
             raise OSError("synthetic: the CLI did not start")
-        # B is in progress when A stops the walk, and its refresh occurs after that.
+        # B continues when A stops the walk, and its refresh occurs after that.
         time.sleep(0.2)
         copy = Path(env["PROTON_DRIVE_CACHE_DIR"]) / "auth-session.json"
         copy.write_bytes(b"refreshed")

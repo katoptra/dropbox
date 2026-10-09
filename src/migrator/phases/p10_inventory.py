@@ -42,9 +42,9 @@ HISTORY_DAYS = 7
 
 
 def prune_history(connection: sqlite3.Connection, days: int = HISTORY_DAYS) -> int:
-    """Delete the events and the commands from before the last `days` days. But it keeps
-    the reconcile figures of the last complete walk, which the report reads. These
-    figures can be from some weeks before."""
+    """Delete the events and the commands from before the last `days` days. Keep the
+    reconcile figures, because the report reads those of the last completed walk. That
+    walk can be some weeks before this run."""
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with connection:
         events = connection.execute(
@@ -64,8 +64,8 @@ def recase_display_paths(connection: sqlite3.Connection, inventory_id: int) -> i
     letters. The name in the row of a folder is the correct name of that folder.
 
     This function makes the path_display of each entry again, from the names of its
-    ancestors and its own name. Thus, the tree in staging and in Proton has one name for
-    each folder."""
+    ancestors and from the name of the entry. Thus, the tree in staging and in Proton
+    has one name for each folder."""
     rows = connection.execute(
         "SELECT rowid, path_lower, path_display, name, tag FROM dropbox_objects WHERE inventory_id=?",
         (inventory_id,),

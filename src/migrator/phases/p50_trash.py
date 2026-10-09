@@ -22,16 +22,16 @@ from .p40_batches import should_start
 PHASE = "50_trash"
 now = time.time
 # ponytail: a checkpoint makes a snapshot of the full state, compresses it and pushes
-# it. This takes about one minute, and the time increases with the size of the state.
-# One checkpoint for each 50 folders (about twelve minutes of listings and trash calls)
-# keeps this time below one tenth of the phase. If a run stops in this phase, it loses
-# the records of at most 50 folders. The next run lists their files again and gets
-# NOT_FOUND for them.
+# it. The time for this is about one minute, and it increases with the size of the
+# state. One checkpoint for each 50 folders (about twelve minutes of listings and trash
+# calls) keeps this time below one tenth of the phase. If a run stops in this phase, the
+# state does not record the results of at most 50 folders. The next run lists their
+# files again and gets NOT_FOUND for them.
 CHECKPOINT_EVERY = 50
 # ponytail: one `filesystem trash` call finds its paths one after the other, at about
-# two seconds for each path, against a command timeout of 300 s. Thus, a call has at
-# most 50 paths (about 100 s). The ceiling is the time of the CLI for each path. The
-# upgrade path: trash by node UID when the CLI accepts a UID.
+# two seconds for each path, and the command timeout is 300 s. Thus, a call has at most
+# 50 paths (about 100 s). The ceiling is the time of the CLI for each path. The upgrade
+# path: trash with the node UID when the CLI accepts a UID.
 TRASH_CHUNK = 50
 
 
@@ -130,7 +130,7 @@ def run(ctx: PhaseContext) -> PhaseResult:
 
 
 def _units(ctx: PhaseContext, rows: list) -> list[tuple[tuple[str, str | None], list]]:
-    """The work, as units. Each unit is a sequence of trash calls:
+    """This function puts the work in units. Each unit is a sequence of trash calls:
 
     - A folder unit `(parent, name)` is a topmost directory that has no remaining file
       of the mirror. One call on the folder node moves each deleted file in it to the
@@ -216,8 +216,9 @@ def _trash_unit(
 
 
 def _plan_files(by_name: dict, parent: str, group: list) -> tuple[list, list]:
-    """Each deleted file by name, and the recorded UID selects one of the twins. The
-    targets are in chunks of TRASH_CHUNK, each chunk with the rows that it completes."""
+    """Find each deleted file with its name. If there are twins, the recorded UID
+    selects one of them. The targets are in chunks of TRASH_CHUNK, each chunk with the
+    rows that it completes."""
     hits = []
     gone = []
     for row in group:

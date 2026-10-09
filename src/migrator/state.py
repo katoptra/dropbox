@@ -159,8 +159,9 @@ CREATE TABLE IF NOT EXISTS dropbox_objects (
 );
 CREATE INDEX IF NOT EXISTS idx_dropbox_objects_compare
 ON dropbox_objects(inventory_id, comparison_key);
--- delta and report join mirror_objects to the listing by path. Without this index,
--- each mirrored row scans the full listing, and delta takes hours, not minutes.
+-- delta and report join mirror_objects to the listing on the path. Without this
+-- index, each mirrored row scans the full listing, and the time for delta is hours, not
+-- minutes.
 CREATE INDEX IF NOT EXISTS idx_dropbox_objects_path
 ON dropbox_objects(inventory_id, path_lower);
 

@@ -131,9 +131,9 @@ class Proton:
     destination: str = "/my-files/Dropbox"
     list_max_attempts: int = 8
     # If a mutation gets an error that is not an authentication error, the provider
-    # tries it again after a backoff. If an upload sends the same bytes again, the CLI
-    # skips them, but the summary counts each item. Thus, a retry can only make the run
-    # longer.
+    # tries it again after a backoff. If the provider uploads the same bytes again, the
+    # CLI skips them, but the summary counts each item. Thus, a retry can only make the
+    # run longer.
     mutation_max_attempts: int = 3
     initial_backoff_seconds: float = 3
     maximum_backoff_seconds: float = 120

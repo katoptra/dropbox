@@ -34,10 +34,10 @@ def items(
 def _set_item(
     ctx: PhaseContext, batch_id: int, path_lower: str, status: str, **columns: Any
 ) -> None:
-    # ponytail: one commit for each row. Thus, if a step stops before its end, it loses
-    # at most the row in progress. The ceiling is one fsync for each file in each step.
-    # The upgrade path: put all the status changes of a step in one transaction, and
-    # commit it at the end of the step.
+    # ponytail: one commit for each row. Thus, if a step stops before its end, at most
+    # one row has no commit. The ceiling is one fsync for each file in each step. The
+    # upgrade path: put all the status changes of a step in one transaction, and commit
+    # it at the end of the step.
     assignments = ", ".join(["status=?", *(f"{name}=?" for name in columns)])
     with ctx.state.connection:
         ctx.state.connection.execute(
@@ -91,9 +91,10 @@ def _prune_empty_dirs(root: Path) -> None:
 def resolve_children(
     proton: Any, parent: str, phase: str
 ) -> dict[str, list[dict[str, Any]]]:
-    """List one Proton folder and group the nodes of the listing by name. Two or more
-    nodes with the same name are a duplicate in Proton. Each caller (trash) makes the
-    path of a node with `child_cli_path(parent, name, uid, len(by_name[name]) > 1)`."""
+    """List one Proton folder, and put the nodes of the listing in groups, one for each
+    name. Two or more nodes with the same name are a duplicate in Proton. Each caller
+    (trash) makes the path of a node with `child_cli_path(parent, name, uid,
+    len(by_name[name]) > 1)`."""
     children = proton.list_folder(parent, phase)
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for node in children:
@@ -102,13 +103,13 @@ def resolve_children(
 
 
 def fetch(ctx: PhaseContext, dropbox: Any, batch_id: int) -> dict[str, int]:
-    """One Dropbox API call for each file, in a thread pool. Each file goes to its
-    path_display in staging.
+    """fetch makes one Dropbox API call for each file, in a thread pool. Each file goes
+    to its path_display in staging.
 
-    fetch clears staging, then fills it. If an item of the batch has a status after the
-    PLANNED and VANISHED statuses of fetch, a second fetch can erase files in staging
-    that verify and upload use. Thus, fetch refuses to run, and no file goes away
-    without an error."""
+    fetch removes the files in staging, then fills it. An item of the batch can have a
+    status after the PLANNED and VANISHED statuses of fetch. If it does, a second fetch
+    can erase files in staging that verify and upload use. Thus, fetch refuses to run,
+    and no file goes away without an error."""
     advanced = [
         r for r in items(ctx, batch_id) if r["status"] not in ("PLANNED", "VANISHED")
     ]
@@ -142,7 +143,7 @@ def fetch(ctx: PhaseContext, dropbox: Any, batch_id: int) -> dict[str, int]:
                     details_json=_details("vanished"),
                 )
                 counts["vanished"] += 1
-            except Exception as exc:  # noqa: BLE001 - the pool completes, then the batch stops
+            except Exception as exc:  # noqa: BLE001 - raise after the pool completes
                 if error is None:
                     error = exc
             else:
@@ -166,10 +167,9 @@ def fetch(ctx: PhaseContext, dropbox: Any, batch_id: int) -> dict[str, int]:
 
 def verify(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
     """A mismatch is a file that changed after the listing and before the fetch. verify
-    removes it from staging, and thus the upload does not see it. verify counts it, but
-    does not record it. The next listing finds it again. If all the files are
-    mismatches, the cause is corruption, not edits in Dropbox, and the batch stops with
-    an error."""
+    removes it from staging, and thus upload does not see it. verify counts it, but does
+    not record it. The next listing finds it again. If all the files are mismatches, the
+    cause is corruption, not edits in Dropbox, and the batch stops with an error."""
     counts: Counter[str] = Counter()
     rows = items(ctx, batch_id, "FETCHED")
     for row in rows:
@@ -217,7 +217,7 @@ def upload(ctx: PhaseContext, proton: Any, batch_id: int) -> dict[str, int]:
         return {"uploaded_files": 0, "uploaded_bytes": 0}
     sources = sorted(path for path in ctx.paths.staging.iterdir())
     stdout = proton.upload_tree(sources, ctx.cfg.proton.destination, PHASE)
-    # confirm reads the transfer summary of the CLI to know the result of the upload.
+    # confirm reads the transfer summary of the CLI to know the result of `upload`.
     # Thus, the phase keeps this artifact.
     report = ctx.phase_dir(PHASE) / f"upload-{batch_id}.json"
     report.write_text(stdout or "", encoding="utf-8")
@@ -230,8 +230,9 @@ def upload(ctx: PhaseContext, proton: Any, batch_id: int) -> dict[str, int]:
 
 
 def _last_summary(report: Path) -> dict[str, Any] | None:
-    """The CLI writes its progress, and then its summary, as one JSON object on each
-    line. The last line with `transferredItems` is the summary."""
+    """While the CLI uploads, it writes one JSON object on each line. Its summary is
+    also one JSON object on a line. The last line with `transferredItems` is the
+    summary."""
     if not report.exists():
         return None
     summary: dict[str, Any] | None = None
@@ -246,8 +247,9 @@ def _last_summary(report: Path) -> dict[str, Any] | None:
 
 
 def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
-    """The summary of the CLI tells the result of the upload, and confirm does not list
-    Proton again. A batch confirms if these two conditions are correct:
+    """The summary of the CLI tells the result of `upload`, and confirm does not list
+    Proton again. The verified files of a batch get the CONFIRMED status if these two
+    conditions are correct:
 
     - The transferred, skipped and failed items are equal in number to the verified
       files plus each directory that holds them.
@@ -266,11 +268,11 @@ def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
     skipped = int(summary.get("skippedItems", 0))
     failed = int(summary.get("failedItems", 0))
     failures = [f for f in summary.get("failures") or [] if isinstance(f, dict)]
-    # The CLI names a failure only by its basename. Thus, each verified item with that
-    # name stays for the next run. If a twin gets this mark but its upload was correct,
-    # the cost is one skip of the same content. If a failure names no file of the batch
-    # (for example, a folder), the CLI did not try to upload some files. Then the phase
-    # records no file of the batch.
+    # The CLI names a failure only with its basename. Thus, each verified item with that
+    # name stays for the next run. If a twin gets this mark but the CLI uploaded it
+    # correctly, the cost is one skip of the same content. If a failure names no file of
+    # the batch (for example, a folder), the CLI did not try to upload some files. Then
+    # the phase records no file of the batch.
     errors = {str(f.get("name") or ""): str(f.get("error") or "") for f in failures}
     errors.pop("", None)
     failed_rows = [

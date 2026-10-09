@@ -62,8 +62,8 @@ def test_fetch_stages_under_path_display_and_marks_vanished(state_context):
     dropbox = FakeDropbox(files, missing=["/Docs/gone.txt"])
     counts = batch.fetch(ctx, dropbox, batch_id)
     assert counts == {"fetched": 1, "vanished": 1}
-    # fetch gets each file with its path_lower, and the file goes to a path with the
-    # uppercase and lowercase letters of Dropbox
+    # fetch gets each file with its path_lower. The file goes to a path with the
+    # uppercase and lowercase letters of Dropbox.
     assert sorted(dropbox.downloaded) == ["/docs/gone.txt", "/docs/réport.txt"]
     assert (ctx.paths.staging / "Docs" / "Réport.txt").read_bytes() == b"report"
     assert sorted(p.name for p in ctx.paths.staging.rglob("*")) == [
@@ -117,8 +117,9 @@ class _PoolResponse:
 
 
 class _PoolSession:
-    """Answers by the path in the Dropbox-API-Arg header. Thus, each parallel worker
-    gets its own file. The first call for `limited` gets a rate limit."""
+    """Answers with the file of the path in the Dropbox-API-Arg header. Thus, each
+    parallel worker gets the correct file. The first call for `limited` gets a rate
+    limit."""
 
     def __init__(self, contents, limited):
         self.contents = contents
@@ -276,7 +277,7 @@ def test_confirm_leaves_a_named_failure_for_the_next_run(state_context):
     batch.fetch(ctx, FakeDropbox(files), batch_id)
     batch.verify(ctx, batch_id)
     proton = FakeProton({})
-    # The CLI names a failure by basename: the two a.txt files get it.
+    # The CLI names a failure with its basename: the two a.txt files get it.
     proton.fail = {"a.txt"}
     batch.upload(ctx, proton, batch_id)
     counts = batch.confirm(ctx, batch_id)

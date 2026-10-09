@@ -88,7 +88,7 @@ class Store:
 
     def probe(self) -> None:
         """Raise StoreError if the bucket does not answer a listing. An incorrect bucket
-        name or a rejected credential must not look like an empty mirror."""
+        name or a rejected credential must not give the result of an empty mirror."""
         try:
             self.client.list_objects_v2(Bucket=self.bucket, MaxKeys=1)
         except (ClientError, BotoCoreError, Boto3Error) as exc:

@@ -13,22 +13,22 @@
 #   - report-mirror, the report-engine no-op and empty-trash-pipeline
 #
 # The secrets are the names in op.env. The toolbox gets their values from the vault in
-# 1Password and gives each value to the image by its name. Of these values, only the age
-# identity goes into a file on the disk: mode 0600, for one call. Each step runs in the
-# toolbox image, on a laptop and in CI.
+# 1Password. It gives each value to the image with its name, not on a command line. Of
+# these values, only the age identity goes into a file on the disk: mode 0600, for one
+# call. Each step runs in the toolbox image, on a laptop and in CI.
 version: '3'
 
 vars:
   # The full Proton walk, weekly. The due verb of the toolbox counts the hours from the
-  # last complete walk.
+  # last completed walk.
   RECONCILE_HOURS: 168
 
-# The environment of each migrator command in a run. RUN_BUDGET_MIN is a task var. A run
-# sets it after the double dash (task sync -- RUN_BUDGET_MIN=30), or in the vars input of
-# the workflow. This line gives it to the migrator by the same name. If the var is unset,
-# its value is empty, and the migrator reads an empty value as unset. A run also sets
-# RECONCILE after the double dash, but the due verb of the toolbox reads it, not the
-# migrator.
+# This env: section is the environment of each migrator command in a run. RUN_BUDGET_MIN
+# is a task var. A run sets it after the double dash (task sync -- RUN_BUDGET_MIN=30), or
+# in the vars input of the workflow. This line gives it to the migrator with the same
+# name. If the var is unset, its value is empty, and the migrator reads an empty value as
+# unset. A run also sets RECONCILE after the double dash, but the due verb of the toolbox
+# reads it, not the migrator.
 #
 # The work directory and the config path of the migrator are its defaults: .run and
 # config/mirror.toml. AWS_REGION is an ENV line in the image. Thus, each command in the
@@ -65,8 +65,8 @@ includes:
         "                            ${d}with no key it lists the history${r}"
         "  task session-seal -- dir  Encrypt a laptop Proton CLI session into R2"
   # The proton engine supplies session, session-seal, empty-trash, and the pull and push
-  # that the due and reconciled verbs of the toolbox use. This file has its own version
-  # of each task in the excludes: list.
+  # that the due and reconciled verbs of the toolbox use. This file contains a different
+  # version of each task in the excludes: list.
   proton:
     taskfile: https://raw.githubusercontent.com/katoptra/lib/v2/engines/proton.yml
     flatten: true
@@ -122,7 +122,7 @@ tasks:
     cmds:
       - python -m migrator --apply reconcile
       - task: record-walk
-  # This task records a walk in R2 only if the walk is complete. After a walk that is not
+  # This task records a walk in R2 only if the walk completed. After a walk that did not
   # complete, the next run is due again, and it continues the walk.
   record-walk:
     internal: true
@@ -131,9 +131,9 @@ tasks:
   # It writes .run/report.md from the state, completes the run row and writes the chain
   # marker.
   report-phase: { internal: true, cmds: ['python -m migrator --apply report'] }
-  # The empty-trash verb of the engine starts this task by name in the image, through
-  # task op. go-task does not start an internal task from the command line. Thus, this
-  # task is not internal.
+  # The empty-trash verb of the engine uses `task op` to start this task in the image.
+  # go-task does not start an internal task from the command line. Thus, this task is not
+  # internal.
   empty-trash-pipeline:
     cmds:
       - task: clock
@@ -147,10 +147,10 @@ tasks:
   # adds no rows of the engine.
   report-engine: {cmds: []}
 
-  # The report verb of the toolbox runs this task after its own rows. It runs at the end of
-  # the pipeline, and on the failure path after a run that stopped at a step. If a run
-  # stopped before its report phase, this task runs the report phase, which completes the
-  # run row. Then the report goes on the job page, below the rows of the toolbox.
+  # The report verb of the toolbox runs this task after the rows of the toolbox. It runs at
+  # the end of the pipeline, and on the failure path after a run that stopped at a step. If
+  # a run stopped before its report phase, this task runs the report phase, which completes
+  # the run row. Then the report goes on the job page, below the rows of the toolbox.
   report-mirror:
     internal: true
     cmds:
@@ -171,8 +171,8 @@ tasks:
       - python -m pytest
       - ruff check src tests
       - ruff format --check src tests
-      # empty-trash starts empty-trash-pipeline by name in the image. A dry run shows that
-      # go-task accepts that name from the command line.
+      # empty-trash starts empty-trash-pipeline with its name in the image. A dry run shows
+      # that go-task accepts that name from the command line.
       - task --dry empty-trash-pipeline >/dev/null 2>&1 || { echo "empty-trash-pipeline is internal" >&2; exit 1; }
 
   fmt:
