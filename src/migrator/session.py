@@ -7,14 +7,10 @@ from pathlib import Path
 from . import crypt
 from .env import Runtime
 from .paths import WorkPaths
-from .phases.base import PhaseError
 from .store import Store
 
 SESSION_KEY = ".state/session.tar.age"
 SESSION_FILES = ("auth-session.json", "clientUid.json")
-# Process-global: each phase runs in its own process, so the first write-back in a phase
-# always pushes the session once, and later calls push only when the digest has changed.
-_last_digest: str | None = None
 
 
 def _digest(directory: Path) -> str | None:
@@ -22,6 +18,14 @@ def _digest(directory: Path) -> str | None:
     if not auth.is_file():
         return None
     return hashlib.sha256(auth.read_bytes()).hexdigest()
+
+
+def _recorded(paths: WorkPaths) -> str | None:
+    """The first word of .run/session.sha: a digest, as sha256sum writes it."""
+    try:
+        return paths.session_sha.read_text(encoding="utf-8").split()[0]
+    except (OSError, IndexError):
+        return None
 
 
 def _bundle(source_dir: Path, paths: WorkPaths, runtime: Runtime, store: Store) -> None:
@@ -40,44 +44,15 @@ def _bundle(source_dir: Path, paths: WorkPaths, runtime: Runtime, store: Store) 
         encrypted.unlink(missing_ok=True)
 
 
-def restore(runtime: Runtime, paths: WorkPaths, store: Store) -> None:
-    global _last_digest
-    encrypted = paths.root / "session.tar.age"
-    if not store.get(SESSION_KEY, encrypted):
-        raise PhaseError(
-            "no Proton session in R2; run `task session-seal` after a laptop login"
-        )
-    tar_path = paths.root / "session.tar"
-    try:
-        crypt.decrypt(runtime.age_identity, paths.age_key, encrypted, tar_path)
-        with tarfile.open(tar_path) as archive:
-            for member in archive.getmembers():
-                if member.name not in SESSION_FILES:
-                    raise PhaseError("session bundle holds an unexpected member")
-            archive.extractall(paths.session, filter="data")
-        for name in SESSION_FILES:
-            member = paths.session / name
-            if member.exists():
-                member.chmod(0o600)
-    finally:
-        encrypted.unlink(missing_ok=True)
-        tar_path.unlink(missing_ok=True)
-    _last_digest = _digest(paths.session)
-
-
 def writeback(runtime: Runtime, paths: WorkPaths, store: Store) -> bool:
-    """Push the session to R2 when auth-session.json changed since the last push."""
-    global _last_digest
+    """Send the session to R2 if auth-session.json is different from the digest in
+    .run/session.sha. Then write the new digest to that file, as the proton engine's
+    session-push does."""
     current = _digest(paths.session)
-    if current is None or current == _last_digest:
+    if current is None or current == _recorded(paths):
         return False
+    print("session: token rotated, sealing it back to the bucket")
     _bundle(paths.session, paths, runtime, store)
-    _last_digest = current
+    auth = paths.session / SESSION_FILES[0]
+    paths.session_sha.write_text(f"{current}  {auth}\n", encoding="utf-8")
     return True
-
-
-def seal(runtime: Runtime, paths: WorkPaths, store: Store, source_dir: Path) -> None:
-    for name in SESSION_FILES:
-        if not (source_dir / name).is_file():
-            raise PhaseError(f"session directory lacks {name}")
-    _bundle(source_dir, paths, runtime, store)

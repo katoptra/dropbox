@@ -44,10 +44,10 @@ weekly walk leaves it alone.
 ## How it works
 
 Once a night a GitHub Actions job runs this pipeline inside the toolbox image from
-[katoptra/lib](https://github.com/katoptra/lib). The toolbox's own verbs are the solid
-boxes; every dashed box is one `python -m migrator <command>`. This mirror includes the
-toolbox alone and supplies its own pipeline: the Taskfile owns the order, the Python
-owns every decision.
+[katoptra/lib](https://github.com/katoptra/lib). The verbs of the toolbox and the proton
+engine are the solid boxes; every dashed box is one `python -m migrator <command>`. This
+mirror includes the toolbox and the proton engine, and supplies its own pipeline: the
+Taskfile owns the order, the Python owns every decision.
 
 ```mermaid
 flowchart LR
@@ -58,7 +58,7 @@ flowchart LR
   end
   batches --> b --> trash --> reconcile["reconcile<br/>weekly"] --> rp["report"] --> report --> ping
   classDef own stroke-dasharray: 5 5
-  class cp,session,state,inventory,delta,plan,batches,fetch,verify,upload,confirm,checkpoint,trash,reconcile,rp own
+  class cp,state,inventory,delta,plan,batches,fetch,verify,upload,confirm,checkpoint,trash,reconcile,rp own
 ```
 
 | Step | Does |

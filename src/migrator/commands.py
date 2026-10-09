@@ -5,7 +5,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import session, statefile
+from . import statefile
 from .config import load_config
 from .env import Runtime
 from .paths import WorkPaths
@@ -40,13 +40,6 @@ def clock(runtime: Runtime, args: list[str]) -> int:
 
 def read_clock(paths: WorkPaths) -> dict[str, int]:
     return json.loads(paths.clock.read_text(encoding="utf-8"))
-
-
-def session_restore(runtime: Runtime, args: list[str]) -> int:
-    paths = _paths(runtime)
-    session.restore(runtime, paths, Store(runtime, paths))
-    print("session: restored")
-    return 0
 
 
 def _fetch_state(runtime: Runtime, paths: WorkPaths) -> str:
@@ -138,13 +131,4 @@ def state_rollback(runtime: Runtime, args: list[str]) -> int:
         return 1
     statefile.rollback(store, args[0])
     print(f"state-rollback: {args[0]} is now the canonical state")
-    return 0
-
-
-def session_seal(runtime: Runtime, args: list[str]) -> int:
-    if not args:
-        raise ValueError("session-seal needs the laptop PROTON_DRIVE_CACHE_DIR path")
-    paths = _paths(runtime)
-    session.seal(runtime, paths, Store(runtime, paths), Path(args[0]))
-    print("session-seal: uploaded")
     return 0

@@ -7,11 +7,12 @@ mirrors, how it works step by step, how to fork it and the runbook;
 this mirror includes. This file is what a change must not break.
 
 Nothing in this repo starts a run: an external scheduler dispatches `sync.yml` nightly.
-This mirror includes the toolbox alone: `Taskfile.yml` owns the order, one
-`python -m migrator <command>` per step, and `src/migrator/` owns every decision but when
-to walk Proton, which is lib's `due`. The infrastructure modules there are from
-donphi/dropbox_proton at `cfd0e57`, MIT; the phases under `src/migrator/phases/` and the
-Taskfile are this repository's own.
+This mirror includes the toolbox and the proton engine. The engine supplies the session
+verbs, `empty-trash`, and the bucket's `pull` and `push`. `Taskfile.yml` owns the order,
+one `python -m migrator <command>` per step of the mirror, and `src/migrator/` owns every
+decision but when to walk Proton, which is lib's `due`. The infrastructure modules there
+are from donphi/dropbox_proton at `cfd0e57`, MIT; the phases under `src/migrator/phases/`
+and the Taskfile are this repository's own.
 
 ## Must knows
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from migrator import crypt, session
+from migrator import crypt
 from migrator.config import Budget, Config, Dropbox, Mirror, Proton
 from migrator.env import Runtime
 from migrator.logging import RunLogger
@@ -150,7 +150,6 @@ def plain_crypt(monkeypatch):
             source.read_bytes()
         ),
     )
-    monkeypatch.setattr(session, "_last_digest", None)
 
 
 def seed_api_inventory(state, purpose, rows):

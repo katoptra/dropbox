@@ -36,7 +36,6 @@ includes:
     vars:
       NAME: dropbox
       DESC: nightly Dropbox -> Proton Drive mirror; R2 holds the state
-      IMAGE: ghcr.io/katoptra/toolbox:proton-v2
       PASS: MIRROR_VERBOSE
       MENU: >-
         ""
@@ -55,6 +54,12 @@ includes:
         "  task state-rollback -- k  Copy a history object over the canonical state"
         "                            ${d}with no key it lists the history${r}"
         "  task session-seal -- dir  Encrypt a laptop Proton CLI session into R2"
+  # The proton engine supplies session, session-seal, empty-trash, and the pull and push
+  # for lib's `due` and `reconciled`. This file has the tasks in the excludes: list.
+  proton:
+    taskfile: https://raw.githubusercontent.com/katoptra/lib/v2/engines/proton.yml
+    flatten: true
+    excludes: [pipeline, plan-pipeline, trash, empty-trash-pipeline, report-engine]
 
 tasks:
   # ---- pipeline (runs inside the toolbox; each step is one migrator command) ----
@@ -93,7 +98,6 @@ tasks:
   # The migrator's own stamp, after the toolbox's clock: its start epoch, hour and weekday
   # to .run/clock.json, and a clean staging, report and chain marker.
   clock-phase: { internal: true, cmds: ['python -m migrator clock'] }
-  session:    { internal: true, cmds: ['python -m migrator session'] }
   state:      { internal: true, cmds: ['python -m migrator state'] }
   inventory:  { internal: true, cmds: ['python -m migrator inventory'] }
   delta:      { internal: true, cmds: ['python -m migrator delta'] }
@@ -110,19 +114,6 @@ tasks:
     internal: true
     status: ['test ! -f {{.RUN}}/walked']
     cmds: [{ task: reconciled }]
-  # What lib's toolbox `due` and `reconciled` keep .state/reconciled through, as an engine's
-  # pull and push would: one plain object of the bucket, over the image's s3.
-  pull:
-    internal: true
-    requires: { vars: [KEY, OUT, MISSING] }
-    cmds:
-      - |
-        rc=0; s3 get {{.KEY}} {{.OUT}} || rc=$?
-        case $rc in 0) ;; 3) {{.MISSING}} ;; *) exit $rc ;; esac
-  push:
-    internal: true
-    requires: { vars: [FILE, KEY] }
-    cmds: ['s3 put {{.FILE}} {{.KEY}}']
   # Builds .run/report.md from the state, closes the run row, writes the chain marker.
   report-phase: { internal: true, cmds: ['python -m migrator --apply report'] }
   empty-trash-pipeline:
@@ -134,8 +125,8 @@ tasks:
       - task: state
       - python -m migrator --apply empty-trash
 
-  # The toolbox's report calls this, then report-mirror. This mirror has no engine, so
-  # it adds no engine rows.
+  # The toolbox's report calls this, then report-mirror. The pipeline of this mirror does
+  # not include the engine's stage or confirm, and this task adds no engine rows.
   report-engine: {cmds: []}
 
   # The toolbox's report calls this after its own rows: at the end of the pipeline, and
@@ -172,21 +163,8 @@ tasks:
       - task run -- ruff format src tests
 
   # ---- write ----
-  empty-trash:
-    desc: Permanently delete Proton trash
-    prompt: This permanently deletes everything in Proton Drive trash. Continue?
-    cmds:
-      - task: op
-        vars: { ARGS: task empty-trash-pipeline }
-
   state-rollback:
     desc: 'Copy a history object over the canonical state: task state-rollback -- <key>'
     cmds:
       - task: op
         vars: { ARGS: 'python -m migrator state-rollback {{.CLI_ARGS}}' }
-
-  session-seal:
-    desc: 'Encrypt a laptop Proton CLI session into R2: task session-seal -- <cache dir>'
-    cmds:
-      - task: op
-        vars: { ARGS: 'python -m migrator session-seal {{.CLI_ARGS}}' }

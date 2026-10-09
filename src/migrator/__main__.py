@@ -9,12 +9,10 @@ from .runner import PHASES, run_phase
 
 COMMANDS = {
     "clock": commands.clock,
-    "session": commands.session_restore,
     "state": commands.state,
     "status": commands.status,
     "state-push": commands.state_push,
     "state-rollback": commands.state_rollback,
-    "session-seal": commands.session_seal,
 }
 
 
