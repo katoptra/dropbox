@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,16 +21,20 @@ def _paths(runtime: Runtime) -> WorkPaths:
 
 
 def clock(runtime: Runtime, args: list[str]) -> int:
-    if runtime.run_epoch is None:
-        raise ValueError("MIRROR_RUN_EPOCH must be set by the Taskfile")
     paths = _paths(runtime)
+    try:
+        epoch = int(paths.start.read_text(encoding="utf-8").split()[0])
+    except (OSError, IndexError, ValueError) as exc:
+        raise ValueError(
+            f"{paths.start} holds no start epoch; the toolbox's clock writes it"
+        ) from exc
     shutil.rmtree(paths.staging, ignore_errors=True)
     paths.staging.mkdir()
-    for stale in (paths.report, paths.chain, paths.walked):
+    for stale in (paths.report, paths.walked):
         stale.unlink(missing_ok=True)
-    started = datetime.fromtimestamp(runtime.run_epoch, UTC)
+    started = datetime.fromtimestamp(epoch, UTC)
     stamp = {
-        "start_epoch": runtime.run_epoch,
+        "start_epoch": epoch,
         "hour_utc": started.hour,
         "weekday": started.weekday(),
     }
@@ -63,8 +68,8 @@ def state(runtime: Runtime, args: list[str]) -> int:
             weekday=stamp["weekday"],
             budget_minutes=runtime.budget_override or cfg.budget.run_budget_minutes,
             host=runtime.host,
-            # lib's toolbox `due` decided before this command, by the age of the last
-            # complete walk.
+            # The due verb of the toolbox (lib) made this decision before this command,
+            # from the age of the last completed walk.
             reconcile=paths.reconcile.exists(),
         )
         files, size = db.mirror_totals()
@@ -77,7 +82,8 @@ def state(runtime: Runtime, args: list[str]) -> int:
 def status(runtime: Runtime, args: list[str]) -> int:
     cfg = load_config(runtime.config_path)
     paths = _paths(runtime)
-    _fetch_state(runtime, paths)  # reads R2 directly and starts no run row
+    # This reads the state from R2 directly, and starts no run row.
+    _fetch_state(runtime, paths)
     db = State(paths.state_db, cfg.mirror.id)
     try:
         files, size = db.mirror_totals()
@@ -113,7 +119,7 @@ def state_push(runtime: Runtime, args: list[str]) -> int:
     paths = _paths(runtime)
     db = State(paths.state_db, cfg.mirror.id)
     try:
-        label = args[0] if args else f"manual-{runtime.run_epoch or 0}"
+        label = args[0] if args else f"manual-{int(time.time())}"
         statefile.push(db, runtime, paths, Store(runtime, paths), label=label)
     finally:
         db.close()

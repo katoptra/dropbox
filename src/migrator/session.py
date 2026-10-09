@@ -21,7 +21,7 @@ def _digest(directory: Path) -> str | None:
 
 
 def _recorded(paths: WorkPaths) -> str | None:
-    """The first word of .run/session.sha: a digest, as sha256sum writes it."""
+    """Returns the first word of .run/session.sha: a digest, as sha256sum writes it."""
     try:
         return paths.session_sha.read_text(encoding="utf-8").split()[0]
     except (OSError, IndexError):
@@ -46,8 +46,8 @@ def _bundle(source_dir: Path, paths: WorkPaths, runtime: Runtime, store: Store) 
 
 def writeback(runtime: Runtime, paths: WorkPaths, store: Store) -> bool:
     """Send the session to R2 if auth-session.json is different from the digest in
-    .run/session.sha. Then write the new digest to that file, as the proton engine's
-    session-push does."""
+    .run/session.sha. Then write the new digest to that file, as session-push of the
+    proton engine does."""
     current = _digest(paths.session)
     if current is None or current == _recorded(paths):
         return False

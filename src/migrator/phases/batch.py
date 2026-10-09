@@ -34,9 +34,10 @@ def items(
 def _set_item(
     ctx: PhaseContext, batch_id: int, path_lower: str, status: str, **columns: Any
 ) -> None:
-    # ponytail: one commit per row, so a killed step loses at most the row in flight.
-    # The ceiling is one fsync per file per step; the upgrade path is to batch the status
-    # writes per step and commit once at its end.
+    # ponytail: one commit for each row. Thus, if a step stops before its end, at most
+    # one row has no commit. The ceiling is one fsync for each file in each step. The
+    # upgrade path: put all the status changes of a step in one transaction, and commit
+    # it at the end of the step.
     assignments = ", ".join(["status=?", *(f"{name}=?" for name in columns)])
     with ctx.state.connection:
         ctx.state.connection.execute(
@@ -50,8 +51,8 @@ def _details(reason: str, **extra: Any) -> str:
 
 
 def local_path(paths: Any, path_display: str) -> Path:
-    """Staging is laid out by path_display so Proton receives Dropbox's own casing;
-    path_lower stays the key and the API path."""
+    """The staging tree uses path_display. Thus, Proton gets the uppercase and lowercase
+    letters of Dropbox. path_lower stays the key and the path for the API."""
     return paths.staging / path_display.lstrip("/")
 
 
@@ -72,8 +73,9 @@ def _clear(directory: Path) -> None:
 
 
 def history_label(ctx: PhaseContext) -> str:
-    """History objects are keyed by the run's start epoch: unique across runs even after
-    a rollback re-issues run ids, and what the spec's `.state/history/<epoch>-...` names."""
+    """The key of a history object starts with the start epoch of the run. This value is
+    unique for each run, also after a rollback gives out the same run ids again. It is
+    the <epoch> that the spec names in `.state/history/<epoch>-...`."""
     return str(int(ctx.state.current_run()["start_epoch"]))
 
 
@@ -89,9 +91,10 @@ def _prune_empty_dirs(root: Path) -> None:
 def resolve_children(
     proton: Any, parent: str, phase: str
 ) -> dict[str, list[dict[str, Any]]]:
-    """List one Proton folder and group its visible nodes by name. More than one node
-    sharing a name is a genuine Proton duplicate: `child_cli_path(parent, name, uid,
-    len(by_name[name]) > 1)` is how every caller (trash) builds its path."""
+    """List one Proton folder, and put the nodes of the listing in groups, one for each
+    name. Two or more nodes with the same name are a duplicate in Proton. Each caller
+    (trash) makes the path of a node with `child_cli_path(parent, name, uid,
+    len(by_name[name]) > 1)`."""
     children = proton.list_folder(parent, phase)
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for node in children:
@@ -100,11 +103,13 @@ def resolve_children(
 
 
 def fetch(ctx: PhaseContext, dropbox: Any, batch_id: int) -> dict[str, int]:
-    """One Dropbox API call per file, run through a thread pool; each lands at its
-    path_display under staging. Fetch owns staging outright: once any item in the batch
-    has moved past fetch's own PLANNED/VANISHED states, a second call would wipe staging
-    out from under files verify/upload already depend on, so it refuses to run rather
-    than silently losing them."""
+    """fetch makes one Dropbox API call for each file, in a thread pool. Each file goes
+    to its path_display in staging.
+
+    fetch removes the files in staging, then fills it. An item of the batch can have a
+    status after the PLANNED and VANISHED statuses of fetch. If it does, a second fetch
+    can erase files in staging that verify and upload use. Thus, fetch refuses to run,
+    and no file goes away without an error."""
     advanced = [
         r for r in items(ctx, batch_id) if r["status"] not in ("PLANNED", "VANISHED")
     ]
@@ -138,12 +143,12 @@ def fetch(ctx: PhaseContext, dropbox: Any, batch_id: int) -> dict[str, int]:
                     details_json=_details("vanished"),
                 )
                 counts["vanished"] += 1
-            except Exception as exc:  # noqa: BLE001 - pool drains fully; batch fails after
+            except Exception as exc:  # noqa: BLE001 - raise after the pool completes
                 if error is None:
                     error = exc
             else:
-                # The state is single-threaded, so the retries a worker collected are
-                # recorded here, on the thread that opened the connection.
+                # Only the thread that opened the state connection can use it. Thus,
+                # this thread records the retries that a worker collected.
                 for retry in retries:
                     ctx.logger.warning(
                         PHASE, "files/download", retry.message, **retry.fields
@@ -151,7 +156,7 @@ def fetch(ctx: PhaseContext, dropbox: Any, batch_id: int) -> dict[str, int]:
                 _set_item(ctx, batch_id, row["path_lower"], "FETCHED")
                 counts["fetched"] += 1
     finally:
-        # An interrupt must not wait on files nobody will use.
+        # An interrupt must not wait for files that no step will use.
         pool.shutdown(cancel_futures=True)
     if error is not None:
         raise error
@@ -161,9 +166,10 @@ def fetch(ctx: PhaseContext, dropbox: Any, batch_id: int) -> dict[str, int]:
 
 
 def verify(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
-    """A mismatch is a file edited between listing and fetch: removed from staging so the
-    upload never sees it, counted, never recorded; the next listing catches it. Every
-    file mismatching is corruption, not editing, and fails the batch."""
+    """A mismatch is a file that changed after the listing and before the fetch. verify
+    removes it from staging, and thus upload does not see it. verify counts it, but does
+    not record it. The next listing finds it again. If all the files are mismatches, the
+    cause is corruption, not edits in Dropbox, and the batch stops with an error."""
     counts: Counter[str] = Counter()
     rows = items(ctx, batch_id, "FETCHED")
     for row in rows:
@@ -211,7 +217,8 @@ def upload(ctx: PhaseContext, proton: Any, batch_id: int) -> dict[str, int]:
         return {"uploaded_files": 0, "uploaded_bytes": 0}
     sources = sorted(path for path in ctx.paths.staging.iterdir())
     stdout = proton.upload_tree(sources, ctx.cfg.proton.destination, PHASE)
-    # The CLI's own transfer summary is confirm's evidence, so this artifact is kept.
+    # confirm reads the transfer summary of the CLI to know the result of `upload`.
+    # Thus, the phase keeps this artifact.
     report = ctx.phase_dir(PHASE) / f"upload-{batch_id}.json"
     report.write_text(stdout or "", encoding="utf-8")
     ctx.state.record_artifact(ctx.phase_run_id, "upload_report", report, ctx.paths.root)
@@ -223,8 +230,9 @@ def upload(ctx: PhaseContext, proton: Any, batch_id: int) -> dict[str, int]:
 
 
 def _last_summary(report: Path) -> dict[str, Any] | None:
-    """The CLI writes progress and its final summary as one JSON object per line; the
-    last line carrying `transferredItems` is the summary."""
+    """While the CLI uploads, it writes one JSON object on each line. Its summary is
+    also one JSON object on a line. The last line with `transferredItems` is the
+    summary."""
     if not report.exists():
         return None
     summary: dict[str, Any] | None = None
@@ -239,10 +247,15 @@ def _last_summary(report: Path) -> dict[str, Any] | None:
 
 
 def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
-    """The CLI's own summary is the evidence: no re-listing Proton. A batch confirms
-    when transferred, skipped and failed items account for every verified file plus
-    every directory it landed in, and every failure names a file in the batch; those
-    files alone are left for the next run."""
+    """The summary of the CLI tells the result of `upload`, and confirm does not list
+    Proton again. The verified files of a batch get the CONFIRMED status if these two
+    conditions are correct:
+
+    - The transferred, skipped and failed items are equal in number to the verified
+      files plus each directory that holds them.
+    - Each failure names a file in the batch.
+
+    Only the files that the failures name stay for the next run."""
     rows = items(ctx, batch_id, "VERIFIED")
     files = len(rows)
     if not files:
@@ -255,10 +268,11 @@ def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
     skipped = int(summary.get("skippedItems", 0))
     failed = int(summary.get("failedItems", 0))
     failures = [f for f in summary.get("failures") or [] if isinstance(f, dict)]
-    # The CLI names a failure by basename alone, so every verified item carrying that
-    # name is left for the next run; an over-marked twin costs one content-identical
-    # skip. A failure naming nothing in the batch (a folder, say) means files were never
-    # attempted, and the whole batch stays unrecorded as before.
+    # The CLI names a failure only with its basename. Thus, each verified item with that
+    # name stays for the next run. If a twin gets this mark but the CLI uploaded it
+    # correctly, the cost is one skip of the same content. If a failure names no file of
+    # the batch (for example, a folder), the CLI did not try to upload some files. Then
+    # the phase records no file of the batch.
     errors = {str(f.get("name") or ""): str(f.get("error") or "") for f in failures}
     errors.pop("", None)
     failed_rows = [
@@ -299,7 +313,7 @@ def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
                 ),
             )
     for name in sorted(matched) if confirmed else ():
-        # The error class reaches the log; the name stays in the encrypted state.
+        # The class of the error goes to the log. The name stays in the encrypted state.
         ctx.logger.warning(
             PHASE,
             "confirm",
@@ -325,7 +339,7 @@ def confirm(ctx: PhaseContext, batch_id: int) -> dict[str, int]:
 
 
 def checkpoint(ctx: PhaseContext, store: Store, batch_id: int) -> dict[str, int]:
-    """Merge every CONFIRMED row, then push the state. Always the last step."""
+    """Merge the CONFIRMED rows, then push the state. This is always the last step."""
     connection = ctx.state.connection
     good = items(ctx, batch_id, "CONFIRMED")
     now = utc_now()
@@ -364,8 +378,8 @@ def checkpoint(ctx: PhaseContext, store: Store, batch_id: int) -> dict[str, int]
                 (batch_id,),
             ).fetchone()[0]
         )
-        # Only a batch that recorded nothing fails; named upload failures ride along
-        # and come back through the next delta.
+        # Only a batch that recorded no file gets the FAILED status. The named upload
+        # failures stay with the batch, and the next delta finds them again.
         status = "FAILED" if failed and not good else "CHECKPOINTED"
         connection.execute(
             "UPDATE batches SET status=?, completed_at=? WHERE id=?",
@@ -376,8 +390,9 @@ def checkpoint(ctx: PhaseContext, store: Store, batch_id: int) -> dict[str, int]
             "SELECT number FROM batches WHERE id=?", (batch_id,)
         ).fetchone()[0]
     )
-    # Staging is dead once confirm has counted it; clearing it first keeps the
-    # snapshot, its xz and its age copy off a disk still holding a whole batch.
+    # After confirm counts the files in staging, the phase does not use them again. This
+    # step removes them first. Thus, the snapshot, its xz and its age copy do not go on
+    # a disk that holds a full batch.
     _clear(ctx.paths.staging)
     statefile.push(
         ctx.state, ctx.runtime, ctx.paths, store, label=f"{history_label(ctx)}-{number}"

@@ -172,7 +172,7 @@ def test_figures_and_markdown_carry_counts_never_names(
     assert "percent mirrored" in text.lower() and "66.7" in text
     assert ctx.paths.chain.exists()
     assert result.status == "PASS"
-    assert "RUNNING" not in text  # the report never lists its own unfinished row
+    assert "RUNNING" not in text  # the report does not list its own unfinished row
     assert result.outputs["status"] == "SUCCESS"
     row = ctx.state.connection.execute(
         "SELECT status FROM runs WHERE id=?", (ctx.run_id,)
@@ -193,7 +193,7 @@ def test_report_marks_failed_run_and_writes_no_chain(
 ):
     ctx = _ctx(state_context)
     _populate(ctx, chain=False)
-    # No 60_reconcile figures event has ever been logged: no walk has run yet.
+    # The log has no 60_reconcile figures event: no walk ran.
     assert p70_report.figures(ctx)["verification"] == {
         "confirmed_this_run": 1,
         "confirm_failed": 0,
@@ -253,8 +253,9 @@ def test_reconcile_walk_partial_never_reads_as_a_clean_bill_of_health(state_cont
     )
     verification = p70_report.figures(ctx)["verification"]
     assert verification["reconcile_walk"] == "partial, 7 folders pending"
-    # A partial walk logs no matched/dropped/strays/mismatch of its own: these must not
-    # read as a clean (zeroed) result until a walk actually finishes.
+    # A walk that did not complete writes only zero matched/dropped/strays/mismatch
+    # values to the log. These values must not show a clean (zero) result until a walk
+    # completes.
     assert verification["reconcile_matched"] == "n/a"
     assert verification["reconcile_dropped"] == "n/a"
     assert verification["reconcile_strays_trashed"] == "n/a"
@@ -285,7 +286,8 @@ def test_reconcile_walk_reports_the_latest_complete_walk_after_a_partial_one(
         folders_pending=3,
     )
     verification = p70_report.figures(ctx)["verification"]
-    # The most recent walk is still resuming, but the last complete walk's counts stand.
+    # The most recent walk did not complete, but the values of the last completed walk
+    # stay.
     assert verification["reconcile_walk"] == "partial, 3 folders pending"
     assert verification["reconcile_matched"] == 5
     assert verification["reconcile_dropped"] == 1

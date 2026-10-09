@@ -62,7 +62,7 @@ def test_upload_tree_failure_raises_and_still_hooks(state_context, tmp_path):
     )
     with pytest.raises(ProtonCLIError, match="AUTH"):
         provider.upload_tree([tmp_path / "A"], "/my-files/Dropbox", "40_batches")
-    assert hooks == [1] and len(calls) == 1  # a dead session is never retried
+    assert hooks == [1] and len(calls) == 1  # no retry for a rejected session
 
 
 def test_mutation_retries_a_transient_failure_then_gives_up(state_context, tmp_path):
@@ -181,7 +181,8 @@ def test_upload_timeout_keeps_the_stderr_tail_as_evidence(state_context, tmp_pat
     )
     with pytest.raises(ProtonCLIError, match="timed out"):
         provider.upload_tree([tmp_path / "A"], "/my-files/Dropbox", "40_batches")
-    # the session is written back after every attempt, even when the CLI is killed
+    # the provider writes the session back after each attempt, also if the CLI stops
+    # before its end
     assert hooks == [1] * cfg.proton.mutation_max_attempts
     row = state.connection.execute(
         "SELECT message, safe_raw_error FROM events WHERE level='ERROR' ORDER BY id DESC"

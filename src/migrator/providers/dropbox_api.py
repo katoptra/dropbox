@@ -39,7 +39,8 @@ class DropboxIdentity:
 
 @dataclass(frozen=True)
 class RetryEvent:
-    """A download retry, carrying the logger keywords the caller passes on."""
+    """One retry of a download, with the logger keywords that the caller gives to the
+    logger."""
 
     message: str
     fields: dict[str, Any]
@@ -65,7 +66,8 @@ class DropboxAPIProvider:
         self._rate_lock = threading.Lock()
 
     def _throttle(self) -> None:
-        """Serializes the pacing sleep so concurrent downloads share one call rate."""
+        """One lock holds each sleep between calls. Thus, the parallel downloads use one
+        call rate together."""
         interval = self.cfg.dropbox.minimum_call_interval_seconds
         if interval:
             with self._rate_lock:
@@ -162,9 +164,9 @@ class DropboxAPIProvider:
         raise AssertionError("unreachable Dropbox retry loop")
 
     def download(self, path_lower: str, target: Path) -> list[RetryEvent]:
-        """Returns the retries it took, for the caller to log. Downloads run in a thread
-        pool and the logger's sink writes SQLite from the thread that opened it, so a
-        pooled download records nothing itself."""
+        """Returns the retries of the download, and the caller writes them to the log.
+        The downloads run in a thread pool. The sink of the logger writes SQLite only
+        from the thread that opened it. Thus, a download in the pool records nothing."""
         settings = self.cfg.dropbox
         url = settings.content_base_url.rstrip("/") + "/files/download"
         headers = {
@@ -184,8 +186,9 @@ class DropboxAPIProvider:
                     self._throttle()
                     return events
             except requests.RequestException as exc:
-                # The body streams inside this try, so a drop mid-file retries too; the
-                # half-written part file goes before the next attempt reopens it.
+                # The body streams in this try block. Thus, if the connection stops
+                # during a file, the download tries again. The part file, with only some
+                # of its data, goes before the next try opens it again.
                 _part_file(target).unlink(missing_ok=True)
                 events.append(
                     RetryEvent(
@@ -450,8 +453,8 @@ class DropboxAPIProvider:
                 int(bool(entry.get("is_downloadable", True))),
                 symlink.get("target"),
                 json.dumps(entry.get("export_info"), ensure_ascii=False),
-                # Every column the pipeline reads is already its own column; the
-                # entry's raw API JSON would be half the listing and nothing reads it.
+                # Each value that the pipeline reads has a column. The raw API JSON of
+                # the entry can be half of the listing, and no step reads it.
                 "{}",
                 page_number,
                 page_number,
@@ -494,8 +497,8 @@ def _write_download(response: requests.Response, target: Path) -> None:
 def _download_wait(
     response: requests.Response, delay: float, settings: Dropbox
 ) -> tuple[str, float, float]:
-    """A retryable status returns (category, wait_seconds, next_delay); anything else
-    raises DropboxNotFound or DropboxAPIError directly."""
+    """For a status that lets the download try again, returns (category, wait_seconds,
+    next_delay). For all other statuses, raises DropboxNotFound or DropboxAPIError."""
     safe_error = response.text[-4000:]
     if response.status_code == 409:
         if _path_not_found(response):

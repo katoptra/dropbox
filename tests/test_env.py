@@ -22,7 +22,6 @@ def test_defaults_and_secrets():
     runtime = Runtime.from_environ(BASE)
     assert runtime.work_dir == Path(".run")
     assert runtime.config_path == Path("config/mirror.toml")
-    assert runtime.run_epoch is None
     assert runtime.budget_override is None
     assert set(runtime.secrets()) == {
         "AGE-SECRET-KEY-1TEST",
@@ -49,13 +48,11 @@ def test_account_identifiers_are_secrets_and_redacted():
 def test_overrides_and_host():
     env = {
         **BASE,
-        "MIRROR_RUN_EPOCH": "1700000000",
         "RUN_BUDGET_MIN": "30",
         "GITHUB_RUN_ID": "42",
         "MIRROR_WORK_DIR": "/tmp/w",
     }
     runtime = Runtime.from_environ(env)
-    assert runtime.run_epoch == 1700000000
     assert runtime.budget_override == 30
     assert runtime.host == "github:42"
     assert runtime.work_dir == Path("/tmp/w")
@@ -67,6 +64,6 @@ def test_missing_secret_is_empty_not_error():
     assert runtime.secrets() == []
 
 
-def test_bad_epoch_rejected():
-    with pytest.raises(ValueError, match="MIRROR_RUN_EPOCH"):
-        Runtime.from_environ({**BASE, "MIRROR_RUN_EPOCH": "noon"})
+def test_bad_budget_rejected():
+    with pytest.raises(ValueError, match="RUN_BUDGET_MIN"):
+        Runtime.from_environ({**BASE, "RUN_BUDGET_MIN": "noon"})

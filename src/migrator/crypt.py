@@ -13,8 +13,8 @@ class CryptError(RuntimeError):
 
 @contextmanager
 def _identity_file(identity: str, key_file: Path):
-    # ponytail: age reads identities from a file; this one lives on the ephemeral
-    # runner disk for the duration of one call, mode 0600, and is removed after.
+    # ponytail: age reads an identity from a file. This file is on the temporary disk of
+    # the runner, with mode 0600, during one call. Then this function removes it.
     if not identity:
         raise CryptError("required secret is unset: MIRROR_AGE_IDENTITY")
     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import subprocess
+import tarfile
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+from conftest import FakeStore
 
+from migrator import session
 from migrator.providers.proton_cli import (
     ProtonCLIError,
     ProtonCLIProvider,
@@ -258,8 +263,8 @@ def test_walk_lists_every_folder_below_the_root_by_uid(state_context):
     provider = ProtonCLIProvider(cfg, state, logger, run=runner, sleep=lambda _: None)
     snapshot = provider.inventory("reconcile", "60_reconcile", reuse_complete=False)
     listed = [c for c in calls if c != "version"]
-    # The root is the one folder addressed by name; every descendant is addressed by
-    # UID so the CLI resolves it in one lookup instead of listing every ancestor.
+    # The walk addresses only the root with its name, and each descendant with its UID.
+    # Thus, the CLI finds a descendant in one lookup and does not list each ancestor.
     assert sorted(listed) == sorted([root, "/my-files/uid-a", "/my-files/uid-b"])
     stored = {
         r["uid"]: r["cli_path"]
@@ -327,11 +332,12 @@ def test_walk_adopts_the_session_a_worker_refreshed_and_retries_the_loser(
             return subprocess.CompletedProcess(argv, 0, _listing(payload), "")
         session = Path(env["PROTON_DRIVE_CACHE_DIR"]) / "auth-session.json"
         if argv[-1] == "/my-files/uid-a":
-            # The winner: the CLI refreshed its token and rewrote its own copy.
+            # The winner: the CLI refreshed its token and wrote its copy again.
             session.write_bytes(b"refreshed")
             return subprocess.CompletedProcess(argv, 0, _listing([]), "")
         if session.read_bytes() == b"old":
-            # The loser: its refresh was rejected, so the CLI signed this copy out.
+            # The loser: the server rejected its refresh. Thus, the CLI signed this copy
+            # out.
             session.unlink()
             return subprocess.CompletedProcess(argv, 1, "", "auth: session invalid")
         return subprocess.CompletedProcess(argv, 0, _listing([]), "")
@@ -361,6 +367,94 @@ def test_walk_adopts_the_session_a_worker_refreshed_and_retries_the_loser(
     }
 
 
+def test_a_walk_that_raises_still_sends_the_token_a_worker_rotated(
+    state_context, plain_crypt
+):
+    cfg, paths, state, logger, runtime = state_context
+    _seed_session(paths.session)
+    digest = hashlib.sha256(b"old").hexdigest()
+    auth = paths.session / "auth-session.json"
+    paths.session_sha.write_text(f"{digest}  {auth}\n", encoding="utf-8")
+    root = cfg.proton.destination
+    store = FakeStore()
+
+    def runner(argv, env=None, **kwargs):
+        if argv[-1] == "version":
+            return subprocess.CompletedProcess(argv, 0, "cli-drive@0.8.0\n", "")
+        if argv[-1] == root:
+            payload = [
+                {"uid": "uid-a", "name": "A", "type": "folder"},
+                {"uid": "uid-b", "name": "B", "type": "folder"},
+            ]
+            return subprocess.CompletedProcess(argv, 0, _listing(payload), "")
+        if argv[-1] == "/my-files/uid-a":
+            # The CLI refreshed the token: the server accepts only the new one.
+            copy = Path(env["PROTON_DRIVE_CACHE_DIR"]) / "auth-session.json"
+            copy.write_bytes(b"refreshed")
+            return subprocess.CompletedProcess(argv, 0, _listing([]), "")
+        return subprocess.CompletedProcess(argv, 1, "", "synthetic failure")
+
+    provider = ProtonCLIProvider(
+        cfg,
+        state,
+        logger,
+        run=runner,
+        sleep=lambda _: None,
+        after_call=lambda: session.writeback(runtime, paths, store),
+        session_dir=paths.session,
+    )
+    with pytest.raises(ProtonCLIError, match="exhausted retries"):
+        provider.inventory("reconcile", "60_reconcile", reuse_complete=False)
+    assert auth.read_bytes() == b"refreshed"
+    assert _sent(store) == b"refreshed", "the bucket must hold the rotated token"
+
+
+def test_a_walk_that_raises_waits_for_the_listings_in_flight(
+    state_context, plain_crypt
+):
+    cfg, paths, state, logger, runtime = state_context
+    _seed_session(paths.session)
+    root = cfg.proton.destination
+    store = FakeStore()
+
+    def runner(argv, env=None, **kwargs):
+        if argv[-1] == "version":
+            return subprocess.CompletedProcess(argv, 0, "cli-drive@0.8.0\n", "")
+        if argv[-1] == root:
+            payload = [
+                {"uid": "uid-a", "name": "A", "type": "folder"},
+                {"uid": "uid-b", "name": "B", "type": "folder"},
+            ]
+            return subprocess.CompletedProcess(argv, 0, _listing(payload), "")
+        if argv[-1] == "/my-files/uid-a":
+            raise OSError("synthetic: the CLI did not start")
+        # B continues when A stops the walk, and its refresh occurs after that.
+        time.sleep(0.2)
+        copy = Path(env["PROTON_DRIVE_CACHE_DIR"]) / "auth-session.json"
+        copy.write_bytes(b"refreshed")
+        return subprocess.CompletedProcess(argv, 0, _listing([]), "")
+
+    provider = ProtonCLIProvider(
+        cfg,
+        state,
+        logger,
+        run=runner,
+        sleep=lambda _: None,
+        after_call=lambda: session.writeback(runtime, paths, store),
+        session_dir=paths.session,
+    )
+    with pytest.raises(OSError, match="synthetic"):
+        provider.inventory("reconcile", "60_reconcile", reuse_complete=False)
+    assert _sent(store) == b"refreshed", "the bucket must hold the rotated token"
+
+
+def _sent(store) -> bytes:
+    """Return auth-session.json from the session bundle in the bucket (plain_crypt: no
+    age)."""
+    with tarfile.open(fileobj=io.BytesIO(store.objects[session.SESSION_KEY])) as tar:
+        return tar.extractfile("auth-session.json").read()
+
+
 def test_worker_listings_never_write_the_shared_session_back_from_a_thread(
     state_context,
 ):
@@ -386,8 +480,8 @@ def test_worker_listings_never_write_the_shared_session_back_from_a_thread(
         sleep=lambda _: None,
         after_call=lambda: callers.append(threading.current_thread()),
     )
-    # No session directory: workers share the real session, and only the main thread
-    # may push it to R2.
+    # No session directory: the workers use the one session, and only the main thread
+    # can push it to R2.
     provider.inventory("reconcile", "60_reconcile", reuse_complete=False)
     assert callers and set(callers) == {threading.main_thread()}
 

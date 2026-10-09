@@ -14,8 +14,9 @@ SNAPSHOT_PURPOSE = "reconcile"
 
 
 def _prune_other_snapshots(connection: sqlite3.Connection, snapshot_id: int) -> None:
-    # One walk is evidence enough; the previous one is dead weight in every checkpoint.
-    # The walk just completed or resumed is the one kept, whether or not it finished.
+    # One walk gives sufficient data. The previous walk only makes each checkpoint
+    # larger. This function keeps the walk that this run completed or continued, also if
+    # the walk did not complete.
     with connection:
         stale = [
             (int(r["id"]),)
@@ -43,15 +44,17 @@ def _folder_counts(connection: sqlite3.Connection, snapshot_id: int) -> tuple[in
 def _correct_mirror(
     connection: sqlite3.Connection, nodes: dict[str, sqlite3.Row]
 ) -> tuple[int, int, int, int, set[str]]:
-    """Drops mirror_objects rows Proton lacks, mis-sizes or whose SHA-1 differs, and
-    refreshes the recorded UID for the rest. Returns (dropped, refreshed, matched,
-    sha1_mismatch, comparison keys of the rows still on record)."""
+    """Deletes the mirror_objects rows that Proton does not have, or that have an
+    incorrect size or a different SHA-1. For the other rows, it updates the recorded
+    UID. Returns (dropped, refreshed, matched, sha1_mismatch, the comparison keys of the
+    rows that stay in the state)."""
     dropped = refreshed = matched = sha1_mismatch = 0
     known: set[str] = set()
     with connection:
         for row in connection.execute("SELECT * FROM mirror_objects").fetchall():
-            # Captured before the drop below: a row this reconcile is about to correct
-            # still counts as state the mirror knows about, not an untracked stray.
+            # This line gets the key before the deletion that follows. A row that this
+            # reconcile will correct is state that the mirror knows, not an unknown
+            # stray.
             key = comparison_key(str(row["path_display"]))
             known.add(key)
             node = nodes.get(key)
@@ -60,9 +63,9 @@ def _correct_mirror(
                 or node["claimed_size"] is None
                 or int(node["claimed_size"]) != int(row["size"])
             )
-            # A node with no claimed digest yet (Proton hasn't computed one) has
-            # nothing to differ from, so it is left out of the comparison rather than
-            # counted as a mismatch.
+            # A node with no claimed digest (Proton did not calculate one) gives no
+            # value to compare. Thus, this function does not compare the node, and the
+            # node is not a mismatch.
             digest_mismatch = (
                 not size_mismatch
                 and node["sha1"] is not None
@@ -90,10 +93,10 @@ def _correct_mirror(
 def _stray_folders(
     connection: sqlite3.Connection, snapshot_id: int, inventory_id: int, known: set[str]
 ) -> list[str]:
-    """Proton folders under the destination that Dropbox no longer has and that hold
-    nothing the mirror knows about, topmost only: trashing a folder takes its subtree
-    with it, and a folder still holding a file on record waits for that file's own
-    trash call."""
+    """The Proton folders in the destination that are not in Dropbox and that hold no
+    file that the mirror knows. Only the topmost folders: a trash call on a folder also
+    moves its subtree to the trash. A folder that holds a file of the state waits for
+    the trash call of that file."""
     dropbox_folders = {
         comparison_key(str(row["path_display"]))
         for row in connection.execute(
@@ -149,11 +152,12 @@ def run(ctx: PhaseContext) -> PhaseResult:
         return PhaseResult(outputs={"skipped": skipped})
     proton.root_uid(PHASE)
     deadline = int(run["start_epoch"]) + int(run["budget_minutes"]) * 60 - 600
-    # ponytail: the walk is one CLI process per folder, spread over proton.walk_workers
-    # workers, each folder addressed by UID. Its cost is the folder count divided by the
-    # workers; a stable purpose plus reuse_complete=False resumes the RUNNING snapshot
-    # the deadline or a killed run left behind instead of restarting at the root, and
-    # still refuses to reuse a COMPLETE walk from a previous reconcile.
+    # ponytail: the walk is one CLI process for each folder, on proton.walk_workers
+    # workers, and it addresses each folder with its UID. Its cost is the number of
+    # folders divided by the number of workers. With a stable `purpose` and
+    # reuse_complete=False, the walk continues the RUNNING snapshot that the deadline or
+    # a stopped run did not complete. It does not start again at the root. It also does
+    # not use again a COMPLETE walk from a previous reconcile.
     snapshot_id = proton.inventory(
         SNAPSHOT_PURPOSE, PHASE, reuse_complete=False, deadline=deadline
     )
@@ -185,14 +189,17 @@ def run(ctx: PhaseContext) -> PhaseResult:
             sha1_mismatch=0,
         )
         return PhaseResult(outputs={"partial": folders_pending})
-    # ponytail: the snapshot is compared against today's mirror_objects even when the
-    # walk began weeks ago, so a file changed or trashed since the folder was listed
-    # reads as a drop (a cheap skipped-identical re-upload) or a trash call on a node
-    # already in the trash. The ceiling is a walk spanning several reconcile intervals;
-    # the upgrade path is to restart the snapshot once it is older than one interval.
+    # ponytail: this compares the snapshot with the mirror_objects of this run, also if
+    # the walk started some weeks before this run. A file can change, or go to the
+    # trash, after the walk lists its folder. The result is then a drop or a trash call
+    # on a node that is in the trash. After a drop, the mirror uploads the file again,
+    # and the CLI skips the same content at a low cost. The ceiling: a walk that
+    # continues for more than one reconcile interval. The upgrade path: start a new
+    # snapshot if the walk started more than one interval before this run.
 
-    # proton_nodes.relative_path (and its comparison_key) carry no leading slash while
-    # Dropbox display paths do; comparison_key strips it on both sides before keying.
+    # proton_nodes.relative_path (and its comparison_key) does not start with a slash,
+    # but a Dropbox display path does. comparison_key removes this slash from the two
+    # before it makes the key.
     nodes = {
         str(row["comparison_key"]): row
         for row in connection.execute(

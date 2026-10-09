@@ -19,19 +19,24 @@ class WorkPaths:
         return self.root / "state.sqlite"
 
     @property
+    def start(self) -> Path:
+        # The clock of the toolbox writes the start epoch of the run here.
+        return self.root / "start.txt"
+
+    @property
     def clock(self) -> Path:
         return self.root / "clock.json"
 
     @property
     def session(self) -> Path:
-        # The proton engine's `session` puts the CLI session here, in ROOT_DIR/.run.
-        # Thus the work directory must stay .run.
+        # The session verb of the proton engine puts the CLI session here, in
+        # ROOT_DIR/.run. Thus, the work directory must stay .run.
         return self.root / "session"
 
     @property
     def session_sha(self) -> Path:
-        # The proton engine's `session` writes it. `session.writeback` writes it again
-        # when it sends a changed session to R2.
+        # The session verb of the proton engine writes this file. `session.writeback`
+        # writes it again when it sends a changed session to R2.
         return self.root / "session.sha"
 
     @property
@@ -52,12 +57,12 @@ class WorkPaths:
 
     @property
     def reconcile(self) -> Path:
-        # lib's toolbox `due` leaves it when this run is to walk Proton.
+        # The due verb of the toolbox writes this file if this run must walk Proton.
         return self.root / "reconcile"
 
     @property
     def walked(self) -> Path:
-        # A complete walk leaves it, and the Taskfile then records the reconcile in R2.
+        # A completed walk writes it. Then the Taskfile records the reconcile in R2.
         return self.root / "walked"
 
     @property

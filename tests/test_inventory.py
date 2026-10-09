@@ -82,7 +82,8 @@ def test_prune_keeps_newest_inventories(state_context):
         for r in state.connection.execute("SELECT inventory_id FROM dropbox_objects")
     }
     assert left == set(ids[2:])
-    assert p10_inventory.prune_inventories(state.connection) == 1  # default keeps one
+    # The default keeps one listing.
+    assert p10_inventory.prune_inventories(state.connection) == 1
     left = {
         r["inventory_id"]
         for r in state.connection.execute("SELECT inventory_id FROM dropbox_objects")
@@ -165,5 +166,5 @@ def test_inventory_recases_paths_from_folder_names(state_context, monkeypatch):
         "/apps/outlook/report.pdf": "/Apps/Outlook/Report.pdf",
         "/apps/outlook/other.pdf": "/Apps/Outlook/other.pdf",
     }
-    # a second pass finds nothing left to rewrite
+    # a second call finds no path to change
     assert p10_inventory.recase_display_paths(ctx.state.connection, inventory_id) == 0

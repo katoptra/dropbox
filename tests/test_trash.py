@@ -24,8 +24,8 @@ def _ctx(state_context, apply=True, remaining=0):
 
 
 def _deleted(ctx, displays, uid=None, live=()):
-    """Deleted rows, plus `live` mirror rows that keep their folders from being trashed
-    whole."""
+    """Add the deleted rows. Also add the `live` mirror rows, which stop a trash call on
+    their full folders."""
     with ctx.state.connection:
         for display in live:
             ctx.state.connection.execute(
@@ -49,8 +49,8 @@ def _wire(monkeypatch, proton):
     monkeypatch.setattr(p50_trash, "Store", lambda runtime, paths: FakeStore())
     monkeypatch.setattr(p50_trash, "ProtonCLIProvider", lambda *a, **k: proton)
     monkeypatch.setattr(p50_trash.session, "writeback", lambda *a: False)
-    # The run row starts at epoch 1 with a one-minute budget; a clock stuck at 1 keeps
-    # every folder inside it.
+    # The run row starts at epoch 1 with a budget of one minute. A clock that stays at 1
+    # keeps each folder in the budget.
     monkeypatch.setattr(p50_trash, "now", lambda: 1.0, raising=False)
 
 
@@ -208,7 +208,7 @@ def test_trash_stops_at_the_budget_and_chains(state_context, monkeypatch, plain_
     proton.trashed = []
     proton.trash = lambda paths, phase: proton.trashed.extend(paths)
     _wire(monkeypatch, proton)
-    clock = iter(range(1, 10_000, 40))  # 40 s per look at the clock, 60 s budget
+    clock = iter(range(1, 10_000, 40))  # 40 s for each read of the clock, 60 s budget
     monkeypatch.setattr(p50_trash, "now", lambda: float(next(clock)), raising=False)
     result = p50_trash.run(ctx)
     assert proton.trashed == ["/my-files/Dropbox/Docs/Docs.txt"]
@@ -242,9 +242,9 @@ def test_trash_checkpoints_every_few_folders(state_context, monkeypatch, plain_c
 def test_trash_takes_a_folder_whole_when_nothing_live_remains_under_it(
     state_context, monkeypatch, plain_crypt
 ):
-    """A reorganized Dropbox moves whole trees: the topmost folder the mirror holds
-    nothing live under goes in one call, and a folder still holding a live file gets
-    its deleted files trashed one by one."""
+    """A reorganization of Dropbox moves full trees. The topmost folder with no
+    remaining file of the mirror goes to the trash in one call. In a folder that has a
+    remaining file, the phase moves each deleted file to the trash with its name."""
     ctx = _ctx(state_context)
     _deleted(
         ctx,
@@ -289,8 +289,9 @@ def test_trash_takes_a_folder_whole_when_nothing_live_remains_under_it(
 def test_trash_calls_in_chunks_and_settles_each_chunk(
     state_context, monkeypatch, plain_crypt
 ):
-    """A folder of many files is several calls; a call that dies leaves the earlier
-    chunks' rows settled and the rest for the next run."""
+    """For a folder of many files, the phase makes some calls. If a call stops with an
+    error, the rows of the previous chunks stay recorded, and the remaining rows stay
+    for the next run."""
     ctx = _ctx(state_context)
     names = [f"/Docs/{i}.txt" for i in range(5)]
     _deleted(ctx, names, live=_live(["Docs"]))

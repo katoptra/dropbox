@@ -34,12 +34,12 @@ def _batch_details(ctx: PhaseContext) -> list[dict[str, Any]]:
 
 
 def _reconcile_figures(ctx: PhaseContext) -> dict[str, Any]:
-    """The latest weekly walk's own figures event, by the shared contract
-    (migrator.phases.p60_reconcile). A walk that ran out of budget mid-walk logs
-    `complete=0` with zeroed matched/dropped/strays: those never stand in as evidence,
-    so matched/dropped/strays/mismatches come only from the latest COMPLETE walk, and
-    `reconcile_walk` separately says whether the most recent walk of either kind
-    finished. Absent entirely means no walk has run yet."""
+    """Reads the figures event of the last weekly walk, as migrator.phases.p60_reconcile
+    writes it. If a walk stops at the end of the budget, it writes `complete=0` to the
+    log, and its matched/dropped/strays values are zero. These zero values are not data.
+    Thus, this function reads matched/dropped/strays/mismatches only from the last
+    COMPLETE walk. `reconcile_walk` tells if the most recent walk completed. If there is
+    no event, no walk ran."""
     connection = ctx.state.connection
     latest = connection.execute(
         "SELECT fields_json FROM events WHERE phase='60_reconcile' AND operation='figures' "
@@ -73,8 +73,9 @@ def _throttling(
     command_provider: str | None,
     since: str,
 ) -> dict[str, float]:
-    """This run only: `since` is runs.started_at, and the evidence tables carry no run id,
-    so `commands.started_at` is compared directly."""
+    """The figures are for this run only. `since` is runs.started_at. The events and
+    commands tables have no run id. Thus, this function compares `commands.started_at`
+    with `since`."""
     connection = ctx.state.connection
     waits = [
         float(json.loads(row["fields_json"] or "{}").get("wait_seconds") or 0)
@@ -270,7 +271,8 @@ def render(fig: dict[str, Any], status: str) -> str:
 
 
 def run(ctx: PhaseContext) -> PhaseResult:
-    label = f"{history_label(ctx)}-report"  # before finish_run: current_run() needs the RUNNING row
+    # Before finish_run: current_run() must find the RUNNING row.
+    label = f"{history_label(ctx)}-report"
     fig = figures(ctx)
     run_status = "FAIL" if fig["failed_phases"] else "SUCCESS"
     ctx.paths.report.write_text(render(fig, run_status), encoding="utf-8")
@@ -280,7 +282,8 @@ def run(ctx: PhaseContext) -> PhaseResult:
     ctx.state.finish_run(ctx.run_id, run_status)
     ctx.logger.info(PHASE, "figures", "run figures", **fig)
     if ctx.apply:
-        # The run row, its figures event and the final status exist only here until pushed.
+        # Until this push, the run row, its figures event and the status of the run are
+        # only in the local state.
         statefile.push(
             ctx.state,
             ctx.runtime,
@@ -288,10 +291,10 @@ def run(ctx: PhaseContext) -> PhaseResult:
             Store(ctx.runtime, ctx.paths),
             label=label,
         )
-    # PhaseResult.status is "PASS" when the run finished SUCCESS and "FAIL" otherwise,
-    # matching every other phase's status vocabulary; outputs["status"] and runs.status
-    # (via finish_run) keep "SUCCESS"/"FAIL". A FAIL phase status stops `task pipeline`
-    # before it reaches `ping`.
+    # PhaseResult.status is "PASS" if the run completed with SUCCESS, and "FAIL" if not.
+    # These are the same status words as in all the other phases. outputs["status"] and
+    # runs.status (through finish_run) keep "SUCCESS" or "FAIL". A FAIL phase status
+    # stops `task pipeline` before `ping`.
     return PhaseResult(
         status="PASS" if run_status == "SUCCESS" else "FAIL",
         outputs={

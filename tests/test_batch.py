@@ -30,7 +30,7 @@ def _ctx(state_context):
 
 
 def _batch(ctx, files: dict[str, bytes]) -> int:
-    """files: display path -> content. Inserts a PLANNED batch with matching hashes."""
+    """files: display path -> content. Adds a PLANNED batch with the correct hashes."""
     with ctx.state.connection:
         cursor = ctx.state.connection.execute(
             "INSERT INTO batches(run_id, number, bytes, file_count, status) VALUES (?, 1, ?, ?, 'PLANNED')",
@@ -62,7 +62,8 @@ def test_fetch_stages_under_path_display_and_marks_vanished(state_context):
     dropbox = FakeDropbox(files, missing=["/Docs/gone.txt"])
     counts = batch.fetch(ctx, dropbox, batch_id)
     assert counts == {"fetched": 1, "vanished": 1}
-    # the API is asked by path_lower; the file lands under Dropbox's own casing
+    # fetch gets each file with its path_lower. The file goes to a path with the
+    # uppercase and lowercase letters of Dropbox.
     assert sorted(dropbox.downloaded) == ["/docs/gone.txt", "/docs/réport.txt"]
     assert (ctx.paths.staging / "Docs" / "Réport.txt").read_bytes() == b"report"
     assert sorted(p.name for p in ctx.paths.staging.rglob("*")) == [
@@ -103,7 +104,7 @@ def test_fetch_reraises_after_the_pool_drains_on_a_download_error(state_context)
 
 
 class _PoolResponse:
-    """Enough of requests.Response for DropboxAPIProvider.download."""
+    """Sufficient parts of requests.Response for DropboxAPIProvider.download."""
 
     def __init__(self, status, content=b"", headers=None, text=""):
         self.status_code = status
@@ -116,8 +117,9 @@ class _PoolResponse:
 
 
 class _PoolSession:
-    """Answers by the path in the Dropbox-API-Arg header, so concurrent workers each get
-    their own file; the first call for `limited` is rate limited."""
+    """Answers with the file of the path in the Dropbox-API-Arg header. Thus, each
+    parallel worker gets the correct file. The first call for `limited` gets a rate
+    limit."""
 
     def __init__(self, contents, limited):
         self.contents = contents
@@ -177,7 +179,7 @@ def test_verify_records_hashes_and_skips_a_mismatch(state_context):
     assert rows["/docs/b.txt"]["status"] == "HASH_MISMATCH"
     assert not (
         ctx.paths.staging / "Docs"
-    ).exists()  # wrong bytes never reach the upload
+    ).exists()  # incorrect bytes do not go to the upload
 
 
 def test_verify_fails_batch_when_every_file_mismatches(state_context):
@@ -275,7 +277,8 @@ def test_confirm_leaves_a_named_failure_for_the_next_run(state_context):
     batch.fetch(ctx, FakeDropbox(files), batch_id)
     batch.verify(ctx, batch_id)
     proton = FakeProton({})
-    proton.fail = {"a.txt"}  # the CLI names failures by basename: both a.txt fail
+    # The CLI names a failure with its basename: the two a.txt files get it.
+    proton.fail = {"a.txt"}
     batch.upload(ctx, proton, batch_id)
     counts = batch.confirm(ctx, batch_id)
     assert counts == {"confirmed": 1, "skipped_identical": 0, "confirm_failed": 2}

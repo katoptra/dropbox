@@ -18,7 +18,7 @@ from .guards import (
 
 
 class ConfigError(ValueError):
-    """Raised when job configuration is unsafe or malformed."""
+    """The error for a configuration that is not safe or has an incorrect format."""
 
 
 def _convert(value: Any, expected: Any, base: Path) -> Any:
@@ -130,9 +130,10 @@ class Proton:
     executable: str = "proton-drive"
     destination: str = "/my-files/Dropbox"
     list_max_attempts: int = 8
-    # A mutation that fails on anything but authentication is tried again after a
-    # backoff: an upload repeated over identical bytes is skipped by the CLI and the
-    # summary still accounts for every item, so a retry can only cost time.
+    # If a mutation gets an error that is not an authentication error, the provider
+    # tries it again after a backoff. If the provider uploads the same bytes again, the
+    # CLI skips them, but the summary counts each item. Thus, a retry can only make the
+    # run longer.
     mutation_max_attempts: int = 3
     initial_backoff_seconds: float = 3
     maximum_backoff_seconds: float = 120
@@ -180,8 +181,8 @@ class Config:
 
 _MIRROR_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SECTIONS = {"mirror", "dropbox", "proton", "budget"}
-# Account-specific values live in the vault (op.env) and override the file, so
-# the committed configuration names no account.
+# The values that identify the accounts are in the vault (op.env), and they override the
+# file. Thus, the configuration in the repository names no account.
 ENV_OVERRIDES = {
     "MIRROR_DROPBOX_ACCOUNT_ID": ("dropbox", "expected_account_id"),
     "MIRROR_PROTON_DESTINATION": ("proton", "destination"),

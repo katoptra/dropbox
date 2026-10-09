@@ -19,7 +19,7 @@ class StoreError(RuntimeError):
 
 
 class Store:
-    """R2 object store through boto3's S3 client."""
+    """The R2 object store, through the S3 client of boto3."""
 
     def __init__(
         self,
@@ -41,17 +41,11 @@ class Store:
             raise StoreError("required secret is unset: AWS_SECRET_ACCESS_KEY")
         if not runtime.aws_endpoint_url:
             raise StoreError("required secret is unset: AWS_ENDPOINT_URL_S3")
+        # boto3 reads the endpoint, the keys and the two checksum values from the
+        # environment. The image sets the two checksum values, because R2 rejects the
+        # default checksum headers of the SDK.
         return boto3.client(
-            "s3",
-            endpoint_url=runtime.aws_endpoint_url,
-            aws_access_key_id=runtime.aws_access_key_id,
-            aws_secret_access_key=runtime.aws_secret_access_key,
-            # R2 rejects the SDK's default checksum headers.
-            config=Config(
-                request_checksum_calculation="when_required",
-                response_checksum_validation="when_required",
-                retries={"max_attempts": 5, "mode": "standard"},
-            ),
+            "s3", config=Config(retries={"max_attempts": 5, "mode": "standard"})
         )
 
     def get(self, key: str, target: Path) -> bool:
@@ -93,8 +87,8 @@ class Store:
         return sorted(keys)
 
     def probe(self) -> None:
-        """Fail unless the bucket answers a listing. A wrong bucket name or a rejected
-        credential must never read as an empty mirror."""
+        """Raise StoreError if the bucket does not answer a listing. An incorrect bucket
+        name or a rejected credential must not give the result of an empty mirror."""
         try:
             self.client.list_objects_v2(Bucket=self.bucket, MaxKeys=1)
         except (ClientError, BotoCoreError, Boto3Error) as exc:

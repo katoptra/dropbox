@@ -75,7 +75,7 @@ def test_should_start_rule():
     assert p40_batches.should_start(elapsed=0, longest=0, budget=600, completed=0)
     assert p40_batches.should_start(
         elapsed=5000, longest=0, budget=600, completed=0
-    )  # first batch always
+    )  # the first batch always runs
     assert p40_batches.should_start(elapsed=400, longest=100, budget=600, completed=1)
     assert not p40_batches.should_start(
         elapsed=550, longest=100, budget=600, completed=1
@@ -144,8 +144,9 @@ def test_without_apply_is_planned_only(state_context, monkeypatch):
 
 
 def test_token_is_minted_fresh_for_every_batch_fetch(state_context, monkeypatch):
-    """Dropbox access tokens live four hours and a run up to six: one token minted at
-    phase start expired mid-run on 2026-09-06, failing batch 31 of 46."""
+    """Dropbox accepts an access token for four hours, but a run can continue for six
+    hours. On 2026-09-06, a token from the start of the phase expired during the run,
+    and batch 31 of 46 got an error."""
     ctx = _ctx(state_context, budget_minutes=100)
     _planned(ctx, 3)
     _fake_steps(monkeypatch, seconds_per_batch=60)
