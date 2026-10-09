@@ -17,7 +17,23 @@ test "$last" = 0 && ago="none on record" || ago="$(( (now - last) / 3600 )) h ag
 echo "due: RECONCILE=$r RECONCILE_HOURS=$h, last reconcile $ago: $(test -f /work/.run/reconcile && echo reconciling || echo not this run)"
 
 task: [clock-phase] python -m migrator clock
-task: [session] python -m migrator session
+task: [session] rm -rf /work/.run/session && mkdir -p /work/.run/session && chmod 700 /work/.run/session
+task: [pull] rc=0; s3 get .state/session.tar.age /work/.run/session.tar.age || rc=$?
+case $rc in 0) ;; 3) echo "no Proton session at .state/session.tar.age: log in on a laptop and run task session-seal" >&2; exit 1 ;; *) exit $rc ;; esac
+
+task: [age] test -n "$MIRROR_AGE_IDENTITY" || { echo "MIRROR_AGE_IDENTITY is unset" >&2; exit 1; }
+k=/work/.run/age.key; mkdir -p /work/.run; install -m 600 /dev/null "$k" && printf '%s\n' "$MIRROR_AGE_IDENTITY" > "$k"
+rc=0
+case decrypt in
+  encrypt) age -r "$(age-keygen -y "$k")" -o /work/.run/session.tar /work/.run/session.tar.age || rc=$? ;;
+  decrypt) age -d -i "$k" -o /work/.run/session.tar /work/.run/session.tar.age || rc=$? ;;
+  *) echo "age: MODE must be encrypt or decrypt" >&2; rc=2 ;;
+esac
+rm -f "$k"; exit $rc
+
+task: [session] tar -xf /work/.run/session.tar -C /work/.run/session auth-session.json clientUid.json && chmod 600 /work/.run/session/*.json
+task: [session] rm -f /work/.run/session.tar /work/.run/session.tar.age
+task: [session] sha256sum /work/.run/session/auth-session.json > /work/.run/session.sha
 task: [state] python -m migrator state
 task: [inventory] python -m migrator inventory
 task: [delta] python -m migrator delta
