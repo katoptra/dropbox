@@ -14,8 +14,8 @@ The README of [katoptra/lib](https://github.com/katoptra/lib) is the manual for 
 and the proton engine that this mirror includes. This file gives the rules that each change
 must obey.
 
-No part of this repository starts a run. An external scheduler dispatches `sync.yml`
-nightly, at 11:42 UTC.
+No part of this repository starts a run. An external scheduler dispatches `sync.yml`. Only
+the scheduler has the times of the runs.
 
 The proton engine supplies the session verbs and `empty-trash`. It also supplies the `pull`
 and `push` of the bucket. `Taskfile.yml` sets the sequence of the steps, with one
@@ -114,9 +114,10 @@ repository.
   `RUN_BUDGET_MIN` to the migrator in its environment. `RECONCILE` (`true`, `false` or
   `auto`) is for the `due` verb of lib. `due` writes `.run/reconcile` for the migrator when
   the last completed walk is `RECONCILE_HOURS` (168) or more before the run.
-- **A run failure is the only alert.** The healthcheck in healthchecks.io has the cron
-  `42 11 * * *` UTC and a grace time of 3 hours. On Thursdays, the weekly Proton walk adds
-  approximately 95 minutes to the run, and the grace time includes it.
+- **A run failure is the only alert.** The healthcheck in healthchecks.io has a cron
+  expression with the same times as the slots of the mirror, in UTC, and a grace time of 3
+  hours. On Thursdays, the weekly Proton walk adds approximately 95 minutes to the run, and
+  the grace time includes it.
 
 ## Verifying a change
 
