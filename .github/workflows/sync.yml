@@ -14,7 +14,7 @@ permissions:
 concurrency: {group: sync, cancel-in-progress: false}
 jobs:
   sync:
-    uses: katoptra/lib/.github/workflows/sync.yml@36d75e6b21473400b5b15003025d9a2e81d4eeea # v2.6.0
+    uses: katoptra/lib/.github/workflows/sync.yml@e18ef7d810f0a239a7f6908f55060d8e0f40ce2c # v2.6.1
     # run_budget_minutes in config/mirror.toml is 335, 20 minutes less than this timeout.
     # Thus, the run uploads the last batch and writes the report before the timeout.
     with: {vars: '${{ inputs.vars }}', timeout-minutes: 355}
