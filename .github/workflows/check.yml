@@ -6,5 +6,5 @@ on: {pull_request: {}}
 permissions: {contents: read}
 jobs:
   check:
-    uses: katoptra/lib/.github/workflows/check.yml@e18ef7d810f0a239a7f6908f55060d8e0f40ce2c # v2.6.1
+    uses: katoptra/lib/.github/workflows/check.yml@fbe4a0d42066b9f50a2ce5a4938889dd2c52d0f7 # v2.8.0
     with: {offline: true}
